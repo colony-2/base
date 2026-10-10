@@ -1,6 +1,6 @@
 # Colony 2 base image
 
-`ghcr.io/colony-2/base:latest` is a Linux image for **amd64 and arm64**, based on
+`ghcr.io/colony-2/base:latest` is a Linux image for **amd64 and arm64**, built using
 [`nixos/nix`](https://hub.docker.com/r/nixos/nix). It includes Bash, Nix (with flakes
 and `nix-command` enabled), Git, Node.js 24, Python 3, pnpm, uv/uvx, and
 [`c2j`](https://github.com/colony-2/c2j). The default command opens Bash in
@@ -11,6 +11,30 @@ Bash, Git (`gitMinimal`), Node.js, Python, pnpm, and uv come from one pinned
 `nixpkgs-unstable` revision.
 c2j uses a local Nix derivation for its checksummed upstream release binaries.
 The bundled Python supports uv virtual environments.
+
+The Dockerfile uses `nixos/nix` only for its build stage. The final stage starts
+from `scratch` and receives the installed profile's runtime closure (the tools and
+their dependencies), a registered Nix database, and minimal system configuration.
+It does not inherit the upstream image layers or include its bundled Nixpkgs
+channel, old profiles, build inputs, debug outputs, or download caches.
+
+Runtime Nix uses prebuilt packages from `https://cache.nixos.org` and
+`https://colony2.cachix.org`, with both caches' public signing keys configured.
+Local and remote builds are disabled: `max-jobs = 0`, no remote builders, and no build fallback.
+A pre-build hook also rejects `preferLocalBuild` derivations, which would otherwise
+bypass `max-jobs`. Cache signatures remain required. These are image defaults;
+root can explicitly change the configuration.
+
+Use `nix run`, `nix shell`, or `nix copy` with cached packages. For example:
+
+```sh
+docker run --rm ghcr.io/colony-2/base:latest nix run nixpkgs#hello
+```
+
+Nix fetches package definitions on demand; no channel source tree is bundled.
+If a required output is absent from the configured caches, the command fails
+instead of compiling it. Commands that need local derivations, including some
+development shells and legacy `nix-env` profile operations, are unsupported.
 
 ```sh
 docker run --rm -it -v "$PWD:/workspace" ghcr.io/colony-2/base:latest
@@ -41,6 +65,8 @@ The published index stores the input fingerprint and source revision. No trackin
 commits or expiring cache entries are needed. A failed build leaves `latest`
 unchanged, so the next hourly check retries. Both architectures must pass the
 Dockerfile's smoke checks before the multi-platform image can be published.
+The checks exercise the bundled tools, reject local Nix builds, and download a
+signed cached package into an empty store to verify runtime substitution.
 Each image contains its resolved inputs in `/usr/local/share/base/versions.json`.
 The installed Nix packages and versions are recorded in
 `/usr/local/share/base/packages.json`.

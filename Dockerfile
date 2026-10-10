@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG NIX_IMAGE=nixos/nix:latest
-FROM ${NIX_IMAGE}
+FROM ${NIX_IMAGE} AS build
 
 SHELL ["/bin/sh", "-eu", "-c"]
 ENV PATH="/usr/local/bin:${PATH}" \
@@ -31,7 +31,22 @@ RUN filter_syscalls=true; \
 
 COPY .build/versions.json /usr/local/share/base/versions.json
 COPY scripts/smoke-test.sh /usr/local/bin/base-smoke-test
-RUN chmod +x /usr/local/bin/base-smoke-test && base-smoke-test
+COPY nix/runtime.conf /tmp/runtime.conf
+COPY scripts/assemble-runtime.sh /tmp/assemble-runtime.sh
+RUN /bin/sh /tmp/assemble-runtime.sh
+
+FROM scratch
+COPY --from=build /runtime/ /
+ENV HOME=/root \
+    USER=root \
+    PATH=/usr/local/bin:/root/.nix-profile/bin:/bin \
+    SSL_CERT_FILE=/root/.nix-profile/etc/ssl/certs/ca-bundle.crt \
+    NIX_SSL_CERT_FILE=/root/.nix-profile/etc/ssl/certs/ca-bundle.crt \
+    GIT_SSL_CAINFO=/root/.nix-profile/etc/ssl/certs/ca-bundle.crt
+SHELL ["/bin/sh", "-eu", "-c"]
+RUN --mount=type=bind,source=scripts/test-cache.sh,target=/tmp/test-cache.sh \
+    base-smoke-test && /bin/sh /tmp/test-cache.sh && \
+    nix-collect-garbage > /dev/null 2>&1 && rm -rf /root/.cache
 
 WORKDIR /workspace
 CMD ["/bin/bash"]

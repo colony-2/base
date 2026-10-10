@@ -2,7 +2,10 @@
 !Dockerfile
 !nix/
 !nix/packages.nix
+!nix/runtime.conf
 !scripts/
 !scripts/smoke-test.sh
+!scripts/assemble-runtime.sh
+!scripts/test-cache.sh
 !.build/
 !.build/versions.json

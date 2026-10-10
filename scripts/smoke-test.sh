@@ -40,3 +40,25 @@ test "$(git -C "$test_dir" show HEAD:package.json)" = '{"private":true}'
     uv venv --no-python-downloads .venv
     .venv/bin/python -c 'import sys; assert sys.prefix != sys.base_prefix'
 )
+
+# Reject cache misses, including derivations that bypass max-jobs with
+# preferLocalBuild. These builders would succeed if local builds were enabled.
+for prefer_local in false true; do
+    if nix-build --no-out-link --option substituters '' --expr "
+        derivation {
+            name = \"base-smoke-no-build-$prefer_local\";
+            system = builtins.currentSystem;
+            builder = \"/bin/sh\";
+            args = [ \"-c\" \"echo unexpected-build > \$out\" ];
+            preferLocalBuild = $prefer_local;
+        }
+    " > "$test_dir/build.log" 2>&1; then
+        echo 'Nix unexpectedly allowed a local build' >&2
+        exit 1
+    fi
+    if [ "$prefer_local" = true ]; then
+        grep -q 'local builds are disabled' "$test_dir/build.log"
+    else
+        grep -q 'max-jobs' "$test_dir/build.log"
+    fi
+done
