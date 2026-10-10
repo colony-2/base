@@ -2,12 +2,13 @@
 
 `ghcr.io/colony-2/base:latest` is a Linux image for **amd64 and arm64**, based on
 [`nixos/nix`](https://hub.docker.com/r/nixos/nix). It includes Bash, Nix (with flakes
-and `nix-command` enabled), Node.js 24, Python 3, pnpm, uv/uvx, and
+and `nix-command` enabled), Git, Node.js 24, Python 3, pnpm, uv/uvx, and
 [`c2j`](https://github.com/colony-2/c2j). The default command opens Bash in
 `/workspace`; the image runs as root, following the upstream Nix image.
 
 All tools are installed through Nix using [nix/packages.nix](nix/packages.nix).
-Bash, Node.js, Python, pnpm, and uv come from one pinned `nixpkgs-unstable` revision.
+Bash, Git (`gitMinimal`), Node.js, Python, pnpm, and uv come from one pinned
+`nixpkgs-unstable` revision.
 c2j uses a local Nix derivation for its checksummed upstream release binaries.
 The bundled Python supports uv virtual environments.
 
@@ -29,7 +30,7 @@ The [GitHub Actions workflow](.github/workflows/image.yml):
   `build-<run-id>-<attempt>` tag for each successful publication.
 
 The check tracks the `nixos/nix:latest` manifest digest, the `nixpkgs-unstable`
-revision (covering Bash, Node.js, Python, pnpm, uv, and their dependencies), and the latest
+revision (covering Bash, Git, Node.js, Python, pnpm, uv, and their dependencies), and the latest
 stable c2j GitHub release, including both architectures' asset hashes.
 pnpm and uv updates arrive when available in Nixpkgs. Any Nixpkgs revision change
 triggers a build, including dependency updates without a tool version change.

@@ -23,7 +23,7 @@ let
     or (throw "c2j supports only x86_64-linux and aarch64-linux in this image");
 in
 {
-  inherit (pkgs) bashInteractive nodejs_24 python3 pnpm uv;
+  inherit (pkgs) bashInteractive gitMinimal nodejs_24 python3 pnpm uv;
 
   # c2j is packaged here from its static upstream release. Nix verifies the
   # architecture-specific hash and manages installation into the Nix store.

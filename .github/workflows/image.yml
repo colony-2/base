@@ -79,7 +79,7 @@ jobs:
             index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
           labels: |
             org.opencontainers.image.title=Colony 2 base
-            org.opencontainers.image.description=Nix and Bash with Node.js, Python, pnpm, uv, and c2j
+            org.opencontainers.image.description=Nix and Bash with Git, Node.js, Python, pnpm, uv, and c2j
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha

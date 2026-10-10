@@ -23,7 +23,7 @@ RUN filter_syscalls=true; \
       --argstr c2jVersion "${C2J_VERSION}" \
       --argstr c2jAmd64Sha256 "${C2J_AMD64_SHA256}" \
       --argstr c2jArm64Sha256 "${C2J_ARM64_SHA256}" \
-      -iA bashInteractive nodejs_24 python3 pnpm uv c2j && \
+      -iA bashInteractive gitMinimal nodejs_24 python3 pnpm uv c2j && \
     mkdir -p /usr/local/bin /usr/local/share/base /workspace && \
     ln -sf "$(command -v bash)" /bin/bash && \
     nix-env --query --installed --json > /usr/local/share/base/packages.json && \
