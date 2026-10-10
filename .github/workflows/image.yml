@@ -1,0 +1,105 @@
+name: Build base image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialize publications so an older build cannot overwrite a newer latest tag.
+concurrency:
+  group: base-image-${{ github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Test version resolution and change detection
+        run: python3 -m unittest discover -s tests -v
+
+      # Register binfmt handlers before Buildx detects the worker's platforms.
+      - name: Set up emulation for both architectures
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64,amd64
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Image name
+        id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve versions and check the last published image
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          args=(--image "$IMAGE" --revision "$GITHUB_SHA")
+          if [[ "$EVENT_NAME" == schedule ]]; then
+            args+=(--check)
+          fi
+          python3 scripts/resolve-versions.py "${args[@]}"
+
+      - name: Build, smoke test, and publish
+        if: steps.versions.outputs.changed == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          outputs: type=image,oci-mediatypes=true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:build-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: ${{ steps.versions.outputs.build_args }}
+          annotations: |
+            index:io.colony-2.base.inputs=${{ steps.versions.outputs.fingerprint }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.title=Colony 2 base
+            org.opencontainers.image.description=Nix and Bash with Node.js, Python, pnpm, uv, and c2j
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarize
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          CHANGED: ${{ steps.versions.outputs.changed }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          {
+            if [[ "$CHANGED" != true ]]; then
+              echo 'Skipped: published image already has these inputs and source revision.'
+            elif [[ "$EVENT_NAME" == pull_request ]]; then
+              echo 'Built and smoke tested linux/amd64 and linux/arm64; no image published.'
+            else
+              echo "Published $IMAGE:latest and $IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT (linux/amd64, linux/arm64)."
+            fi
+            echo '```json'
+            cat .build/versions.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

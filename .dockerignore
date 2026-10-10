@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!nix/
+!nix/packages.nix
+!scripts/
+!scripts/smoke-test.sh
+!.build/
+!.build/versions.json
