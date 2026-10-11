@@ -3,7 +3,7 @@ set -eu
 
 # Copy only the installed profile's runtime closure into a new, registered store.
 # nix copy omits build inputs, old profiles, the base-system/channel root, and caches.
-profile=$(readlink -f /root/.nix-profile)
+profile=$(readlink -f /nix/var/nix/profiles/runtime)
 # The trusted build stage contains locally built, unsigned outputs (such as c2j).
 # Disable signature checks only for this local transfer, never for runtime caches.
 nix copy --no-check-sigs --to 'local?root=/runtime' "$profile"

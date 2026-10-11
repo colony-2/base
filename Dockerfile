@@ -18,15 +18,16 @@ COPY nix/packages.nix /tmp/packages.nix
 # Apply this exception only to installation during an emulated build.
 RUN filter_syscalls=true; \
     if [ "${BUILDPLATFORM}" != "${TARGETPLATFORM}" ]; then filter_syscalls=false; fi; \
-    nix-env --option filter-syscalls "$filter_syscalls" -f /tmp/packages.nix \
+    nix-env --option filter-syscalls "$filter_syscalls" \
+      --profile /nix/var/nix/profiles/runtime -f /tmp/packages.nix \
       --argstr nixpkgsRev "${NIXPKGS_REV}" \
       --argstr c2jVersion "${C2J_VERSION}" \
       --argstr c2jAmd64Sha256 "${C2J_AMD64_SHA256}" \
       --argstr c2jArm64Sha256 "${C2J_ARM64_SHA256}" \
-      -iA bashInteractive gitMinimal nodejs_24 python3 pnpm uv c2j && \
+      -iA packages && \
     mkdir -p /usr/local/bin /usr/local/share/base /workspace && \
-    ln -sf "$(command -v bash)" /bin/bash && \
-    nix-env --query --installed --json > /usr/local/share/base/packages.json && \
+    nix-env --profile /nix/var/nix/profiles/runtime --query --installed --json \
+      > /usr/local/share/base/packages.json && \
     rm /tmp/packages.nix
 
 COPY .build/versions.json /usr/local/share/base/versions.json

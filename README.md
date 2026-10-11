@@ -2,25 +2,43 @@
 
 `ghcr.io/colony-2/base:latest` is a Linux image for **amd64 and arm64**, built using
 [`nixos/nix`](https://hub.docker.com/r/nixos/nix). It includes Bash, Nix (with flakes
-and `nix-command` enabled), Git, Node.js 24, Python 3, pnpm, uv/uvx, and
+and `nix-command` enabled), common development tools, Node.js 24, Python 3, pnpm, uv/uvx, and
 [`c2j`](https://github.com/colony-2/c2j). The default command opens Bash in
 `/workspace`; the image runs as root, following the upstream Nix image.
 
 All tools are installed through Nix using [nix/packages.nix](nix/packages.nix).
-Bash, Git (`gitMinimal`), Node.js, Python, pnpm, and uv come from one pinned
-`nixpkgs-unstable` revision.
+Nix and the bundled tools come from one pinned `nixpkgs-unstable` revision, installed
+into a fresh profile so packages inherited from the build image cannot override them.
 c2j uses a local Nix derivation for its checksummed upstream release binaries.
 The bundled Python supports uv virtual environments.
+
+| Category | Tools |
+| --- | --- |
+| Core utilities | Bash, coreutils, findutils, grep, sed, awk, diff, patch, which, file, less, tree |
+| Search and navigation | ripgrep, fd, fzf, bat |
+| Git and GitHub | Git, Git LFS, gh, OpenSSH |
+| HTTP and networking | curl, wget, CA certificates, dnsutils, iputils, iproute2, OpenBSD netcat |
+| JSON and YAML | jq, yq-go |
+| Archives | zip, unzip, tar, gzip, xz, zstd |
+| Build tools | GNU Make, GCC (C and C++), pkg-config, CMake |
+| JavaScript | Node.js 24, pnpm |
+| Python | Python 3, uv/uvx, Ruff |
+| Databases | SQLite |
+| Shell development | ShellCheck, shfmt, entr |
+| Process inspection | procps, psmisc, lsof, strace, htop |
+| File synchronization | rsync |
 
 The Dockerfile uses `nixos/nix` only for its build stage. The final stage starts
 from `scratch` and receives the installed profile's runtime closure (the tools and
 their dependencies), a registered Nix database, and minimal system configuration.
 It does not inherit the upstream image layers or include its bundled Nixpkgs
-channel, old profiles, build inputs, debug outputs, or download caches.
+channel, old profiles, unused build inputs, or download caches. The explicitly
+included compilers and their dependencies increase the runtime image's size.
 
 Runtime Nix uses prebuilt packages from `https://cache.nixos.org` and
 `https://colony2.cachix.org`, with both caches' public signing keys configured.
-Local and remote builds are disabled: `max-jobs = 0`, no remote builders, and no build fallback.
+Local and remote **Nix builds** are disabled: `max-jobs = 0`, no remote builders,
+and no build fallback. Direct project builds using GCC, Make, or CMake work normally.
 A pre-build hook also rejects `preferLocalBuild` derivations, which would otherwise
 bypass `max-jobs`. Cache signatures remain required. These are image defaults;
 root can explicitly change the configuration.
@@ -54,7 +72,7 @@ The [GitHub Actions workflow](.github/workflows/image.yml):
   `build-<run-id>-<attempt>` tag for each successful publication.
 
 The check tracks the `nixos/nix:latest` manifest digest, the `nixpkgs-unstable`
-revision (covering Bash, Git, Node.js, Python, pnpm, uv, and their dependencies), and the latest
+revision (covering all bundled Nixpkgs tools and their dependencies), and the latest
 stable c2j GitHub release, including both architectures' asset hashes.
 pnpm and uv updates arrive when available in Nixpkgs. Any Nixpkgs revision change
 triggers a build, including dependency updates without a tool version change.
@@ -65,7 +83,8 @@ The published index stores the input fingerprint and source revision. No trackin
 commits or expiring cache entries are needed. A failed build leaves `latest`
 unchanged, so the next hourly check retries. Both architectures must pass the
 Dockerfile's smoke checks before the multi-platform image can be published.
-The checks exercise the bundled tools, reject local Nix builds, and download a
+The checks verify all tool executables, compile and run C and C++ programs,
+exercise the package managers, reject local Nix builds, and download a
 signed cached package into an empty store to verify runtime substitution.
 Each image contains its resolved inputs in `/usr/local/share/base/versions.json`.
 The installed Nix packages and versions are recorded in

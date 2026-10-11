@@ -2,7 +2,12 @@
 set -eu
 
 # All bundled tools must resolve to Nix-managed executables.
-for tool in bash git node python3 pnpm uv uvx c2j; do
+for tool in nix bash ls find grep sed awk diff patch which file less tree \
+    rg fd fzf bat git git-lfs gh ssh curl wget dig ping ip nc jq yq \
+    zip unzip tar gzip xz zstd make gcc g++ pkg-config cmake \
+    node pnpm python3 uv uvx ruff sqlite3 shellcheck shfmt entr \
+    ps pstree lsof strace htop rsync c2j; do
+    command -v "$tool" >/dev/null
     case "$(readlink -f "$(command -v "$tool")")" in
         /nix/store/*) ;;
         *) echo "$tool is not installed through Nix" >&2; exit 1 ;;
@@ -14,6 +19,7 @@ nix --version
 nix eval --expr '1 + 1' | grep -qx 2
 git --version
 node --version
+node -e 'if (process.versions.node.split(".")[0] !== "24") process.exit(1)'
 python3 --version
 pnpm --version
 uv --version
@@ -33,6 +39,29 @@ git -C "$test_dir" add package.json
 git -C "$test_dir" -c user.name='Smoke test' -c user.email='smoke@example.invalid' \
     commit --quiet -m 'Smoke test'
 test "$(git -C "$test_dir" show HEAD:package.json)" = '{"private":true}'
+git lfs version
+gh --version
+curl --version
+test -s "$SSL_CERT_FILE"
+printf '{"ok":true}\n' | jq -e .ok >/dev/null
+printf 'ok: true\n' | yq -e .ok >/dev/null
+test "$(sqlite3 :memory: 'select 2 + 2;')" = 4
+
+# Exercise the compiler wrappers, headers, linker, CMake, and Make in the
+# assembled image. Nix builds stay disabled; direct project builds must work.
+mkdir "$test_dir/compile"
+cat > "$test_dir/compile/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+project(smoke LANGUAGES C CXX)
+add_executable(hello-c hello.c)
+add_executable(hello-cxx hello.cc)
+EOF
+printf '#include <stdio.h>\nint main(void) { puts("hello-c"); return 0; }\n' > "$test_dir/compile/hello.c"
+printf '#include <iostream>\nint main() { std::cout << "hello-cxx" << std::endl; }\n' > "$test_dir/compile/hello.cc"
+cmake -S "$test_dir/compile" -B "$test_dir/compile/build" -G 'Unix Makefiles'
+cmake --build "$test_dir/compile/build"
+test "$("$test_dir/compile/build/hello-c")" = hello-c
+test "$("$test_dir/compile/build/hello-cxx")" = hello-cxx
 
 # uv must use a working Nix-provided Python to create virtual environments.
 (

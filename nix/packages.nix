@@ -22,8 +22,52 @@ let
   release = releases.${pkgs.stdenv.hostPlatform.system}
     or (throw "c2j supports only x86_64-linux and aarch64-linux in this image");
 in
-{
-  inherit (pkgs) bashInteractive gitMinimal nodejs_24 python3 pnpm uv;
+rec {
+  # Install a fresh profile so inherited base packages cannot collide with or
+  # override this pinned tool set. Keep Nix itself in the runtime closure.
+  packages = (with pkgs; [
+    nix
+
+    # Core utilities
+    bashInteractive coreutils findutils gnugrep gnused gawk diffutils patch
+    which file less tree
+
+    # Search and navigation
+    ripgrep fd fzf bat
+
+    # Git and GitHub
+    git git-lfs gh openssh
+
+    # HTTP and networking
+    curl wget cacert dnsutils iputils iproute2 netcat-openbsd
+
+    # JSON / YAML processing
+    jq yq-go
+
+    # Archives and compression
+    zip unzip gnutar gzip xz zstd
+
+    # Build tools
+    gnumake gcc pkg-config cmake
+
+    # JavaScript / TypeScript
+    nodejs_24 pnpm
+
+    # Python
+    python3 uv ruff
+
+    # Databases
+    sqlite
+
+    # Shell development
+    shellcheck shfmt entr
+
+    # Process inspection and debugging
+    procps psmisc lsof strace htop
+
+    # File synchronization
+    rsync
+  ]) ++ [ c2j ];
 
   # c2j is packaged here from its static upstream release. Nix verifies the
   # architecture-specific hash and manages installation into the Nix store.
