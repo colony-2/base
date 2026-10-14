@@ -2,7 +2,7 @@
 set -eu
 
 # All bundled tools must resolve to Nix-managed executables.
-for tool in bash ls find grep sed awk diff patch which file less tree \
+for tool in nix bash ls find grep sed awk diff patch which file less tree \
     rg fd fzf bat git git-lfs gh ssh curl wget dig ping ip nc jq yq \
     zip unzip tar gzip xz zstd make gcc g++ pkg-config cmake \
     node pnpm python3 uv uvx ruff sqlite3 shellcheck shfmt entr \

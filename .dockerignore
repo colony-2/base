@@ -7,6 +7,5 @@
 !scripts/smoke-test.sh
 !scripts/assemble-runtime.sh
 !scripts/test-cache.sh
-!scripts/nix-cache-wrapper.py
 !.build/
 !.build/versions.json
