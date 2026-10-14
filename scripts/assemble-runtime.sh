@@ -33,3 +33,18 @@ echo 'This image only supports prebuilt Nix packages from binary caches; local b
 exit 1
 EOF
 chmod +x /runtime/usr/local/bin/base-smoke-test /runtime/usr/local/libexec/nix-deny-build
+
+# Resolve immutable executable paths now. Internal wrapper operations never
+# consult PATH, while ordinary nested user commands keep using these wrappers.
+mkdir -p /runtime/usr/local/libexec/nix-real
+python=$(readlink -f "$profile/bin/python3")
+printf '#!%s -I\n' "$python" > /runtime/usr/local/libexec/nix-cache-wrapper
+tail -n +2 /tmp/nix-cache-wrapper.py >> /runtime/usr/local/libexec/nix-cache-wrapper
+chmod +x /runtime/usr/local/libexec/nix-cache-wrapper
+for command in nix nix-env nix-store nix-build nix-shell \
+    nix-channel nix-copy-closure nix-instantiate nix-prefetch-url; do
+    ln -s "$(readlink -f "$profile/bin/$command")" "/runtime/usr/local/libexec/nix-real/$command"
+    ln -s /usr/local/libexec/nix-cache-wrapper "/runtime/usr/local/bin/$command"
+done
+printf '{"nixBinaryCache":{"version":1,"rootEnv":"COLONY_NIX_CACHE_DIR","layout":"file-binary-cache-v1"}}\n' \
+    > /runtime/usr/local/share/base/capabilities.json

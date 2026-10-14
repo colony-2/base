@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Test version resolution and change detection
+      - name: Test version resolution and cache wrapper
         run: python3 -m unittest discover -s tests -v
 
       # Register binfmt handlers before Buildx detects the worker's platforms.
@@ -61,7 +61,20 @@ jobs:
           fi
           python3 scripts/resolve-versions.py "${args[@]}"
 
-      - name: Build, smoke test, and publish
+      - name: Build and acceptance test both architectures
+        if: steps.versions.outputs.changed == 'true'
+        run: |
+          build_args=()
+          while IFS= read -r arg; do
+            build_args+=(--build-arg "$arg")
+          done < .build/build-args.env
+          for arch in amd64 arm64; do
+            image="colony-base:acceptance-$arch"
+            docker buildx build "${build_args[@]}" --platform "linux/$arch" --load -t "$image" .
+            python3 tests/acceptance_nix_cache.py --image "$image" --platform "linux/$arch"
+          done
+
+      - name: Publish validated image
         if: steps.versions.outputs.changed == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:

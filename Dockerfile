@@ -34,9 +34,11 @@ COPY .build/versions.json /usr/local/share/base/versions.json
 COPY scripts/smoke-test.sh /usr/local/bin/base-smoke-test
 COPY nix/runtime.conf /tmp/runtime.conf
 COPY scripts/assemble-runtime.sh /tmp/assemble-runtime.sh
+COPY scripts/nix-cache-wrapper.py /tmp/nix-cache-wrapper.py
 RUN /bin/sh /tmp/assemble-runtime.sh
 
 FROM scratch
+LABEL io.colony-2.base.nix-binary-cache="1"
 COPY --from=build /runtime/ /
 ENV HOME=/root \
     USER=root \

@@ -60,6 +60,19 @@ docker run --rm ghcr.io/colony-2/base:latest c2j version
 docker run --rm ghcr.io/colony-2/base:latest base-smoke-test
 ```
 
+## Automatic shared Nix binary cache
+
+When a provider mounts a Docker local volume at `/var/cache/colony/nix` and sets
+`COLONY_NIX_CACHE_DIR` to that path, executable Nix wrappers automatically export
+new store paths after commands finish and use the shared cache for substitution.
+The container keeps its own `/nix`; no full-store seeding or daemon is required.
+Failed exports are retried on later invocations. Signature checks and the
+cache-only Nix build policy remain enabled. Unset/empty disables the feature.
+
+The image advertises capability `io.colony-2.base.nix-binary-cache=1`. See the
+[contract and operating documentation](docs/nix-binary-cache.md) for timeouts,
+permissions, coverage limits, and required Pulse/c2j migration work.
+
 ## Automatic builds
 
 The [GitHub Actions workflow](.github/workflows/image.yml):
