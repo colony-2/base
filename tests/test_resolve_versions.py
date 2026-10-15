@@ -1,11 +1,10 @@
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
-
 
 spec = importlib.util.spec_from_file_location(
     "versions", Path(__file__).parents[1] / "scripts" / "resolve-versions.py"
@@ -72,28 +71,7 @@ class ChangeDetectionTests(unittest.TestCase):
 
 
 class ResolutionTests(unittest.TestCase):
-    @patch.object(versions, "nix_image", return_value="nixos/nix@sha256:" + "f" * 64)
-    @patch.object(versions, "fetch_json")
-    def test_resolves_nixpkgs_and_both_c2j_architectures(self, fetch_json, nix_image):
-        fetch_json.side_effect = {
-            "https://api.github.com/repos/NixOS/nixpkgs/commits/nixpkgs-unstable": {"sha": "a" * 40},
-            "https://api.github.com/repos/colony-2/c2j/releases/latest": {
-                "tag_name": "v1.2.3",
-                "assets": [
-                    {"name": "c2j_1.2.3_Linux_x86_64.tar.gz", "digest": "sha256:" + "b" * 64},
-                    {"name": "c2j_1.2.3_Linux_arm64.tar.gz", "digest": "sha256:" + "c" * 64},
-                ],
-            },
-        }.__getitem__
-        self.assertEqual({
-            "NIX_IMAGE": nix_image.return_value,
-            "NIXPKGS_REV": "a" * 40,
-            "C2J_VERSION": "1.2.3",
-            "C2J_AMD64_SHA256": "b" * 64,
-            "C2J_ARM64_SHA256": "c" * 64,
-        }, versions.resolve())
-
-    @patch.object(versions, "resolve", return_value={"NIXPKGS_REV": "a" * 40})
+    @patch.object(versions, "resolve", return_value={"build_args": {"UBUNTU_IMAGE": "ubuntu@sha256:" + "a" * 64, "APT_SNAPSHOT": "20261015T020000Z"}, "apt": {"arm64": {"bash": "1"}}})
     @patch.object(versions, "published_manifest")
     def test_push_forces_build_and_schedule_skips_identical_inputs(self, inspect, resolve):
         import contextlib
@@ -117,10 +95,66 @@ class ResolutionTests(unittest.TestCase):
                     with patch("sys.argv", argv), contextlib.redirect_stdout(io.StringIO()):
                         versions.main()
                     self.assertIn("changed=false\n", output_path.read_text())
-                    self.assertIn("build_args<<BUILD_ARGS\nNIXPKGS_REV=" + "a" * 40 + "\nBUILD_ARGS", output_path.read_text())
-                    self.assertEqual(resolve.return_value, json.loads(Path(".build/versions.json").read_text())["build_args"])
+                    self.assertIn("build_args<<BUILD_ARGS\nUBUNTU_IMAGE=", output_path.read_text())
+                    self.assertEqual(resolve.return_value["apt"], json.loads(Path(".build/versions.json").read_text())["apt"])
             finally:
                 os.chdir(original_dir)
+
+    def test_snapshot_time_and_uncertified_nix_candidate_do_not_trigger_build(self):
+        first = {"build_args": {"APT_SNAPSHOT": "20261015T010000Z"},
+                 "nix": {"candidate": {"arm64": "2.34.3"}, "package_version": "2.34.3"},
+                 "apt": {"arm64": {"libc6": "1"}, "amd64": {"libc6": "1"}}}
+        second = json.loads(json.dumps(first))
+        second["build_args"]["APT_SNAPSHOT"] = "20261015T020000Z"
+        second["nix"]["candidate"]["arm64"] = "2.35.0"
+        self.assertEqual(versions.fingerprint(first), versions.fingerprint(second))
+        second["apt"]["amd64"]["libc6"] = "2"
+        self.assertNotEqual(versions.fingerprint(first), versions.fingerprint(second))
+
+    def test_apt_plan_captures_base_upgrades_and_new_dependencies(self):
+        plan = "bash=1\nlibc6=2\n# PLAN\nInst bash [1] (3 Ubuntu:26.04 [arm64])\nInst nix-bin (2.34.3+dfsg-1 Ubuntu:26.04 [arm64])\nInst libfoo:arm64 (1:2.0-1 Ubuntu:26.04 [arm64])\n# NIX-CANDIDATE\n  Candidate: 2.35.0\n"
+        packages, candidate = versions.parse_apt_plan(plan)
+        self.assertEqual(packages, {"bash": "3", "libc6": "2", "libfoo": "1:2.0-1", "nix-bin": "2.34.3+dfsg-1"})
+        self.assertEqual(candidate, "2.35.0")
+        for line in ("Remv bash [1]", "Inst invalid", "Inst nodejs (22.1.0 Ubuntu [arm64])", "Inst nix-setup-systemd (1 Ubuntu [arm64])"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                versions.parse_apt_plan(plan.replace("# NIX-CANDIDATE", line + "\n# NIX-CANDIDATE"))
+
+    @patch.object(versions, "fetch")
+    @patch.object(versions, "fetch_json")
+    def test_node_stays_on_24_and_requires_both_architectures(self, fetch_json, fetch):
+        fetch_json.return_value = [
+            {"version": "v26.1.0", "files": ["linux-x64", "linux-arm64"]},
+            {"version": "v24.9.0", "files": ["linux-x64", "linux-arm64"]},
+            {"version": "v24.10.0", "files": ["linux-x64", "linux-arm64"]},
+            {"version": "v24.11.0", "files": ["linux-x64"]},
+        ]
+        fetch.return_value = ("a" * 64 + "  node-v24.10.0-linux-x64.tar.xz\n" + "b" * 64 + "  node-v24.10.0-linux-arm64.tar.xz\n").encode()
+        result = versions.node_tool()
+        self.assertEqual(result["version"], "24.10.0")
+        self.assertEqual(set(result["artifacts"]), {"amd64", "arm64"})
+
+    @patch.object(versions, "fetch_json")
+    def test_pnpm_resolves_native_binaries_before_build(self, fetch_json):
+        import base64
+        integrity = "sha512-" + base64.b64encode(b"x" * 64).decode()
+        data = {"version": "12.11.2", "dist": {"tarball": "https://registry.npmjs.org/pnpm/-/pnpm-12.11.2.tgz", "integrity": integrity},
+                "optionalDependencies": {"@pnpm/exe.linux-x64": "12.11.2", "@pnpm/exe.linux-arm64": "12.11.2"}}
+        native = {"version": "12.11.2", "dist": {"tarball": "https://registry.npmjs.org/native.tgz", "integrity": integrity}}
+        fetch_json.side_effect = [data, native, native]
+        result = versions.pnpm_tool()
+        self.assertEqual(set(result["native_artifacts"]), {"amd64", "arm64"})
+        self.assertEqual(result["native_artifacts"]["arm64"]["sha512"], (b"x" * 64).hex())
+        fetch_json.side_effect = [data, {**native, "version": "12.11.1"}]
+        with self.assertRaises(ValueError):
+            versions.pnpm_tool()
+
+    def test_npm_integrity_and_origin_are_required(self):
+        for distribution in ({"tarball": "https://example.com/pnpm.tgz", "integrity": "sha512-aaa"},
+                             {"tarball": "https://registry.npmjs.org/pnpm.tgz", "integrity": "sha512-eA=="},
+                             {"tarball": "https://registry.npmjs.org/pnpm.tgz", "integrity": "sha1-abc"}):
+            with self.subTest(distribution=distribution), self.assertRaises(ValueError):
+                versions.npm_artifact({"dist": distribution})
 
     def test_release_missing_architecture_or_checksum_fails(self):
         with self.assertRaises(ValueError):
@@ -139,15 +173,15 @@ class ResolutionTests(unittest.TestCase):
 
     @patch.object(versions, "fetch")
     @patch.object(versions, "fetch_json", return_value={"token": "test-token"})
-    def test_nix_index_digest_and_platforms(self, fetch_json, fetch):
+    def test_ubuntu_index_digest_and_platforms(self, fetch_json, fetch):
         raw = json.dumps(published()).encode()
         fetch.return_value = raw
-        self.assertEqual("nixos/nix@sha256:" + versions.hashlib.sha256(raw).hexdigest(), versions.nix_image())
+        self.assertEqual("ubuntu@sha256:" + versions.hashlib.sha256(raw).hexdigest(), versions.ubuntu_image())
         manifest = published()
         manifest["manifests"].pop()
         fetch.return_value = json.dumps(manifest).encode()
         with self.assertRaises(ValueError):
-            versions.nix_image()
+            versions.ubuntu_image()
 
 
 if __name__ == "__main__":

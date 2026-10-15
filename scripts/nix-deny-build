@@ -1,0 +1,3 @@
+#!/bin/sh
+echo 'This image only supports prebuilt Nix packages from binary caches; local builds are disabled.' >&2
+exit 1

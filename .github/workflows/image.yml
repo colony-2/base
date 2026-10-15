@@ -12,7 +12,6 @@ permissions:
   contents: read
   packages: write
 
-# Serialize publications so an older build cannot overwrite a newer latest tag.
 concurrency:
   group: base-image-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
@@ -28,8 +27,7 @@ jobs:
       - name: Test version resolution and change detection
         run: python3 -m unittest discover -s tests -v
 
-      # Register binfmt handlers before Buildx detects the worker's platforms.
-      - name: Set up emulation for both architectures
+      - name: Set up emulation
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
         with:
           platforms: arm64,amd64
@@ -48,58 +46,84 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve versions and check the last published image
+      - name: Resolve inputs and compare the migration image
         id: versions
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.meta.outputs.image }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          args=(--image "$IMAGE" --revision "$GITHUB_SHA")
-          if [[ "$EVENT_NAME" == schedule ]]; then
-            args+=(--check)
-          fi
+          args=(--image "$IMAGE" --tag shared-nix-v1 --revision "$GITHUB_SHA")
+          if [[ "$EVENT_NAME" == schedule ]]; then args+=(--check); fi
           python3 scripts/resolve-versions.py "${args[@]}"
 
-      - name: Build, smoke test, and publish
+      # Test the delivered filesystem in disposable containers. No test store
+      # enters an image layer. Publish the common tag only after BOTH pass.
+      - name: Build and validate both architectures
         if: steps.versions.outputs.changed == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          outputs: type=image,oci-mediatypes=true
-          tags: |
-            ${{ steps.meta.outputs.image }}:latest
-            ${{ steps.meta.outputs.image }}:build-${{ github.run_id }}-${{ github.run_attempt }}
-          build-args: ${{ steps.versions.outputs.build_args }}
-          annotations: |
-            index:io.colony-2.base.inputs=${{ steps.versions.outputs.fingerprint }}
-            index:org.opencontainers.image.revision=${{ github.sha }}
-            index:org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          labels: |
-            org.opencontainers.image.title=Colony 2 base
-            org.opencontainers.image.description=Nix and Bash with Git, Node.js, Python, pnpm, uv, and c2j
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p .build/acceptance
+          args=()
+          while IFS= read -r arg; do args+=(--build-arg "$arg"); done < .build/build-args.env
+          for arch in amd64 arm64; do
+            tag="$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
+            build_options=(--platform "linux/$arch" "${args[@]}" -t "$tag"
+              --label "org.opencontainers.image.revision=$GITHUB_SHA"
+              --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
+              --cache-from "type=registry,ref=$IMAGE:shared-nix-v1" --cache-to type=inline)
+            docker buildx build "${build_options[@]}" --load .
+            python3 tests/shared_nix_store/acceptance.py --image "$tag" --platform "linux/$arch" \
+              2>&1 | tee ".build/acceptance/$arch.log"
+            if [[ "$EVENT_NAME" != pull_request ]]; then
+              # Re-export the cached, tested build as OCI. A classic Docker
+              # load/push can convert it to schema2 and lose index annotations,
+              # which would break the hourly fingerprint check.
+              docker buildx build "${build_options[@]}" --output type=image,push=true,oci-mediatypes=true .
+            fi
+          done
+
+      - name: Publish the tested multi-platform migration image
+        if: steps.versions.outputs.changed == 'true' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          FINGERPRINT: ${{ steps.versions.outputs.fingerprint }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:shared-nix-v1" \
+            --tag "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --annotation "index:io.colony-2.base.inputs=$FINGERPRINT" \
+            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-amd64" \
+            "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-arm64"
 
       - name: Summarize
+        if: always()
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           CHANGED: ${{ steps.versions.outputs.changed }}
           EVENT_NAME: ${{ github.event_name }}
+          STATUS: ${{ job.status }}
         run: |
           {
-            if [[ "$CHANGED" != true ]]; then
-              echo 'Skipped: published image already has these inputs and source revision.'
+            echo "Job status: $STATUS"
+            if [[ "$STATUS" != success ]]; then
+              echo 'Failed: the shared-nix-v1 publication was not completed.'
+            elif [[ "$CHANGED" != true ]]; then
+              echo 'Skipped: resolved inputs and source revision are unchanged.'
             elif [[ "$EVENT_NAME" == pull_request ]]; then
-              echo 'Built and smoke tested linux/amd64 and linux/arm64; no image published.'
+              echo 'Validated amd64 and arm64; no image published.'
             else
-              echo "Published $IMAGE:latest and $IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT (linux/amd64, linux/arm64)."
+              echo "Published $IMAGE:shared-nix-v1 and shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT."
             fi
-            echo '```json'
-            cat .build/versions.json
-            echo '```'
+            echo 'The previous latest tag is retained for the Pulse migration.'
+            if [[ -f .build/versions.json ]]; then
+              echo '```json'
+              cat .build/versions.json
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

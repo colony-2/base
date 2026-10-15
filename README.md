@@ -1,127 +1,134 @@
 # Colony 2 base image
 
-`ghcr.io/colony-2/base:latest` is a Linux image for **amd64 and arm64**, built using
-[`nixos/nix`](https://hub.docker.com/r/nixos/nix). It includes Bash, Nix (with flakes
-and `nix-command` enabled), common development tools, Node.js 24, Python 3, pnpm, uv/uvx, and
-[`c2j`](https://github.com/colony-2/c2j). The default command opens Bash in
-`/workspace`; the image runs as root, following the upstream Nix image.
+`ghcr.io/colony-2/base:shared-nix-v1` is the Ubuntu 26.04 migration image for
+**linux/amd64 and linux/arm64**. It includes Bash, Nix, Node.js **24**, Python,
+pnpm, uv/uvx, c2j, and the development tools below. It runs as root, opens Bash
+by default, and uses `/workspace` as its working directory.
 
-All tools are installed through Nix using [nix/packages.nix](nix/packages.nix).
-Nix and the bundled tools come from one pinned `nixpkgs-unstable` revision, installed
-into a fresh profile so packages inherited from the build image cannot override them.
-c2j uses a local Nix derivation for its checksummed upstream release binaries.
-The bundled Python supports uv virtual environments.
+All base tools and Nix's own runtime live outside `/nix`. The image ships an
+**empty `/nix`**. Pulse can attach one shared Docker local volume there, and
+containers execute installed `/nix/store/...` paths directly, including after
+the producer is removed. There is no image-store seed, per-container restoration,
+export hook, Nix wrapper, daemon, or application-wide lock.
+
+The existing `latest` tag is retained during the Pulse migration. This repository
+now publishes `shared-nix-v1`; promotion to `latest` is a separate rollout decision.
+See [the Pulse integration contract](docs/shared-nix-store.md).
 
 | Category | Tools |
 | --- | --- |
 | Core utilities | Bash, coreutils, findutils, grep, sed, awk, diff, patch, which, file, less, tree |
 | Search and navigation | ripgrep, fd, fzf, bat |
-| Git and GitHub | Git, Git LFS, gh, OpenSSH |
-| HTTP and networking | curl, wget, CA certificates, dnsutils, iputils, iproute2, OpenBSD netcat |
-| JSON and YAML | jq, yq-go |
+| Git and GitHub | Git, Git LFS, gh, OpenSSH client |
+| HTTP and networking | curl, wget, CA certificates, DNS tools, ping, iproute2, OpenBSD netcat |
+| JSON and YAML | jq, Mike Farah yq |
 | Archives | zip, unzip, tar, gzip, xz, zstd |
 | Build tools | GNU Make, GCC (C and C++), pkg-config, CMake |
-| JavaScript | Node.js 24, pnpm |
-| Python | Python 3, uv/uvx, Ruff |
+| JavaScript | Node.js 24, npm/npx, pnpm/pnpx |
+| Python | Python 3, venv/development support, uv/uvx, Ruff |
 | Databases | SQLite |
 | Shell development | ShellCheck, shfmt, entr |
 | Process inspection | procps, psmisc, lsof, strace, htop |
 | File synchronization | rsync |
 
-The Dockerfile uses `nixos/nix` only for its build stage. The final stage starts
-from `scratch` and receives the installed profile's runtime closure (the tools and
-their dependencies), a registered Nix database, and minimal system configuration.
-It does not inherit the upstream image layers or include its bundled Nixpkgs
-channel, old profiles, unused build inputs, or download caches. The explicitly
-included compilers and their dependencies increase the runtime image's size.
+[APT packages](apt/packages.txt) supply most tools. Node 24 uses official release
+archives; pnpm uses the npm package and its matching native executable when
+applicable; uv, Ruff, yq and c2j use official release artifacts. All external
+artifacts are resolved and checksummed before installation. No first-use
+bootstrap is needed. `fd` and `bat` expose Ubuntu's `fdfind` and `batcat` names.
 
-Runtime Nix uses prebuilt packages from `https://cache.nixos.org` and
-`https://colony2.cachix.org`, with both caches' public signing keys configured.
-Local and remote **Nix builds** are disabled: `max-jobs = 0`, no remote builders,
-and no build fallback. Direct project builds using GCC, Make, or CMake work normally.
-A pre-build hook also rejects `preferLocalBuild` derivations, which would otherwise
-bypass `max-jobs`. Cache signatures remain required. These are image defaults;
-root can explicitly change the configuration.
+Nix is pinned to **2.34.3**, Ubuntu package **2.34.3+dfsg-1**, in
+[apt/nix-version](apt/nix-version). Its executable, libraries, configuration,
+certificates, registry and build-denial hook all work with an empty `/nix` mount.
+The final filesystem retains Ubuntu's package database and APT tooling.
 
-Use `nix run`, `nix shell`, or `nix copy` with cached packages. For example:
+## Runtime policy
+
+Nix accesses the store directly (`NIX_REMOTE=local`) and fetches prebuilt outputs
+from `https://cache.nixos.org` and `https://colony2.cachix.org`, with their signing
+keys and signature verification enabled. Local and remote Nix builds are disabled,
+including `preferLocalBuild`; direct GCC/Make/CMake builds still work. These are
+defaults for cooperating root workloads, not a security boundary against root.
+
+The bundled `nixpkgs` registry is pinned in [nix/registry.json](nix/registry.json).
+Use ordinary `nix run`, `nix shell`, `nix build`, or `nix copy` for cached outputs.
+Uncached derivations fail rather than compile. Some development shells and legacy
+`nix-env` profile operations therefore cannot work under this policy. Exact paths
+already in the shared store work offline; resolving flake sources/selectors can
+still need network access in a fresh container.
 
 ```sh
-docker run --rm ghcr.io/colony-2/base:latest nix run nixpkgs#hello
+docker run --rm ghcr.io/colony-2/base:shared-nix-v1 c2j version
+docker run --rm ghcr.io/colony-2/base:shared-nix-v1 nix run nixpkgs#hello
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/colony-2/base:shared-nix-v1
 ```
 
-Nix fetches package definitions on demand; no channel source tree is bundled.
-If a required output is absent from the configured caches, the command fails
-instead of compiling it. Commands that need local derivations, including some
-development shells and legacy `nix-env` profile operations, are unsupported.
+Without a mount, ordinary Nix use initializes an ephemeral container-local store.
+For shared volumes, **Pulse must initialize once before concurrent attachment**
+and check ownership, compatibility and readiness. Stock Nix does not safely handle
+all simultaneous first-use/crashed-initializer cases. `base-store-preflight` is a
+bounded diagnostic for Pulse, not a wrapper around Nix. See the integration guide
+for initialization and failure handling.
 
-```sh
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/colony-2/base:latest
-docker run --rm ghcr.io/colony-2/base:latest c2j version
-docker run --rm ghcr.io/colony-2/base:latest base-smoke-test
-```
+Automatic GC and store optimization are disabled. Do not run GC, repair, deletion,
+or destructive maintenance while any worker uses a shared volume. Pulse retires
+whole volumes only after all users detach. Default mutable profiles are private
+under `/root/.local/state/nix/profiles`; do not share `/root` between containers.
 
-## Automatic builds
+## Builds and updates
 
-The [GitHub Actions workflow](.github/workflows/image.yml):
+The [workflow](.github/workflows/image.yml) builds on every push to `main`, on
+manual runs on `main`, and for pull requests. Hourly checks at minute 17 UTC build
+only when the selected inputs or source revision change. PRs never publish.
 
-- Builds and publishes on pushes to `main` and manual workflow runs on `main`.
-- Checks upstream versions hourly, at minute 17 UTC, and publishes only when the
-  inputs or source revision differ from the last successful `latest` image.
-- Builds and smoke tests pull requests without publishing.
-- Publishes a single multi-platform manifest as `latest` and a unique
-  `build-<run-id>-<attempt>` tag for each successful publication.
+The resolver tracks the Ubuntu image digest, the complete selected APT package
+closure for **both** architectures (including base-package security updates),
+and the versions/checksums of all external tools. APT resolution and installation
+use the same Ubuntu archive snapshot. A timestamp-only snapshot change does not
+trigger a rebuild. The installed package closure must exactly match resolution.
 
-The check tracks the `nixos/nix:latest` manifest digest, the `nixpkgs-unstable`
-revision (covering all bundled Nixpkgs tools and their dependencies), and the latest
-stable c2j GitHub release, including both architectures' asset hashes.
-pnpm and uv updates arrive when available in Nixpkgs. Any Nixpkgs revision change
-triggers a build, including dependency updates without a tool version change.
-The build pins those inputs; Nix handles dependency resolution and checksum
-verification for every installed tool.
+Nix stays on its certified pin across tool updates. The available Nix candidate
+is recorded, but a newer Nix package requires a reviewed pin change and store
+compatibility tests. A missing pin or artifact fails the build. Node stays on
+major 24. Dependency/version changes, rather than unrelated archive updates,
+determine the hourly fingerprint.
 
-The published index stores the input fingerprint and source revision. No tracking
-commits or expiring cache entries are needed. A failed build leaves `latest`
-unchanged, so the next hourly check retries. Both architectures must pass the
-Dockerfile's smoke checks before the multi-platform image can be published.
-The checks verify all tool executables, compile and run C and C++ programs,
-exercise the package managers, reject local Nix builds, and download a
-signed cached package into an empty store to verify runtime substitution.
-Each image contains its resolved inputs in `/usr/local/share/base/versions.json`.
-The installed Nix packages and versions are recorded in
-`/usr/local/share/base/packages.json`.
+Each architecture is loaded and tested in disposable containers after building.
+Tests never leave a populated store in an image layer. Only after both pass does
+the workflow publish the multi-platform `shared-nix-v1` tag and immutable
+`shared-nix-build-<run-id>-<attempt>` tag. A failed check leaves the shared tag
+unchanged. Intermediate architecture tags are unique to the run.
 
-Push this repository to `main` with GitHub Actions enabled to activate publishing.
-The workflow uses the built-in `GITHUB_TOKEN` with `packages: write`; no additional
-secret is required. If a GHCR package already exists, grant this repository write
-access to it. Set the package's visibility to public in GHCR if anonymous pulls
-are wanted. Forks automatically publish under their own repository name.
+The image records resolved inputs in `/usr/local/share/base/versions.json` and
+its installed APT packages in `/usr/local/share/base/packages.json`. The index
+records the input fingerprint and source revision; no tracking commits are needed.
+A small Mozilla CA bundle is used only to bootstrap snapshot TLS before Ubuntu's
+certificate package is installed; its resolved hash is also recorded.
 
-[GitHub scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-run from the default branch, can be delayed, and are disabled after 60 days of
-inactivity in public repositories. Keep `main` as the default branch and re-enable
-the schedule if GitHub disables it.
+## Local validation
 
-## Local build
-
-Requires Python 3.9+, Docker Buildx, and emulation for cross-architecture builds
-(Docker Desktop supplies it). In Bash:
+Requires Python 3.11+, Docker Buildx, and emulation for the other architecture.
+Run from the repository root; set `GH_TOKEN` if GitHub API rate limits require it.
 
 ```bash
+python3 -m unittest discover -s tests -v
 python3 scripts/resolve-versions.py
 build_args=()
-while IFS= read -r arg; do
-  build_args+=(--build-arg "$arg")
-done < .build/build-args.env
+while IFS= read -r arg; do build_args+=(--build-arg "$arg"); done < .build/build-args.env
 
-# Build and load the local architecture.
-docker buildx build "${build_args[@]}" --load -t colony-base:local .
-docker run --rm colony-base:local base-smoke-test
-
-# Publish both architectures to a registry you can write to.
-docker buildx build "${build_args[@]}" \
-  --platform linux/amd64,linux/arm64 --push -t YOUR_REGISTRY/base:dev .
+docker buildx build "${build_args[@]}" --platform linux/arm64 --load -t colony-base:local .
+python3 tests/shared_nix_store/acceptance.py --image colony-base:local --platform linux/arm64
+# Repeat with linux/amd64. A containerd-backed Docker image store can load both
+# architectures together with --platform linux/amd64,linux/arm64.
 ```
 
-Set `GH_TOKEN` to use authenticated GitHub API requests if you hit anonymous rate
-limits. Generated build inputs are stored under `.build/` and ignored by Git.
-Run the version-check tests with `python3 -m unittest discover -s tests -v`.
+`base-smoke-test --tools-only` checks tools offline without initializing `/nix`.
+`base-smoke-test` also opens an ephemeral store and verifies Nix build denial.
+The acceptance suite checks signed substitution, offline reuse after producer
+removal, separate-PID concurrency, cancellation, private profiles, c2j child
+processes, signature rejection and provider preflight. Historical probes retaining
+the original unsupported cold-start assertions remain available separately.
+
+See [implementation validation](docs/image-validation.md),
+[version compatibility findings](NIX_STORE_COMPATIBILITY_RESULTS.md), and
+[test instructions](tests/shared_nix_store/README.md).
