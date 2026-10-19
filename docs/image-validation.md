@@ -105,3 +105,38 @@ certification are outside these local results. Live GC is prohibited by v1.
 Local build/test logs, image inspection, exact manifests and timing data are in
 `.build/ubuntu-migration/`. Reproduce with the commands in the repository README
 and `tests/shared_nix_store/acceptance.py`.
+
+## Resolver CI failure reproduced on 2026-10-19
+
+The original validation used Docker 29.5.2's containerd image store. It did not
+cover the classic Docker image store used by the usual GitHub Actions runner
+setup ([Docker documentation](https://docs.docker.com/build/ci/github-actions/multi-platform/)).
+The failed GitHub run's traceback hid Docker's stderr; its archived logs were
+not accessible without authentication from this environment.
+
+An isolated Docker 28.5.2 daemon with the classic `vfs` store reproduced a matching
+exit 125. Concurrent `docker run --platform linux/amd64` and
+`docker run --platform linux/arm64` against the reported Ubuntu index
+`sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944`
+ran arm64 successfully but failed amd64 with:
+
+```text
+docker: cannot overwrite digest sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
+```
+
+The resolver now selects each architecture's child manifest digest from the
+same verified index for APT containers. BuildKit still receives the index digest.
+Failures include architecture, image, snapshot, exit status, stdout and stderr;
+cleanup timeouts cannot mask the original diagnostic.
+
+Validation of this resolver change:
+
+- Complete live version resolution, including concurrent APT plans for both
+  architectures, passes on Docker 28.5.2/classic and Docker 29.5.2/containerd.
+- Both runs use the reported Ubuntu index and snapshot `20261019T200000Z`.
+- All 22 unit tests pass, including child-manifest selection, Docker/APT error
+  diagnostics, and a timeout with a second timeout during cleanup.
+- Ruff checks pass with the Python 3.10 target. Logs are in `.build/ci-fix/`.
+
+This validation covers the resolver fix. It does not claim a rerun of GitHub CI
+or new image builds; the runtime filesystem is unchanged by this patch.

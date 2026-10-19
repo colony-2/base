@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -64,13 +65,22 @@ def ubuntu_image():
                    "application/vnd.docker.distribution.manifest.list.v2+json"),
     })
     manifest = json.loads(raw)
-    platforms = {
-        (item.get("platform", {}).get("os"), item.get("platform", {}).get("architecture"))
-        for item in manifest.get("manifests", [])
-    }
-    if not PLATFORMS <= platforms:
+    images = {}
+    for item in manifest.get("manifests", []):
+        platform = item.get("platform", {})
+        pair = (platform.get("os"), platform.get("architecture"))
+        if pair not in PLATFORMS:
+            continue
+        arch = pair[1]
+        if arch in images:
+            raise ValueError(f"ubuntu:26.04 has ambiguous linux/{arch} manifests")
+        digest = validated(item.get("digest"), r"sha256:[0-9a-f]{64}", "Ubuntu platform digest")
+        images[arch] = "ubuntu@" + digest
+    if set(images) != {arch for _, arch in PLATFORMS}:
         raise ValueError("ubuntu:26.04 must support both linux/amd64 and linux/arm64")
-    return "ubuntu@sha256:" + hashlib.sha256(raw).hexdigest()
+    # BuildKit uses the index, but classic Docker cannot store two architectures
+    # under that same index digest. Run APT against the distinct child manifests.
+    return "ubuntu@sha256:" + hashlib.sha256(raw).hexdigest(), images
 
 
 def release(repo):
@@ -188,8 +198,24 @@ def apt_plan(image, snapshot, nix_version, arch):
         if packages.get("nix-bin") != nix_version:
             raise ValueError("APT changed the certified Nix pin")
         return packages, candidate
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        reason = (f"exited with status {error.returncode}"
+                  if isinstance(error, subprocess.CalledProcessError)
+                  else f"timed out after {error.timeout}s")
+
+        def output(value):
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+        raise RuntimeError(
+            f"APT resolution for linux/{arch} ({image}, snapshot {snapshot}) {reason}\n"
+            f"stdout:\n{output(error.stdout)}\nstderr:\n{output(error.stderr)}"
+        ) from error
     finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
+        try:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            # A failed cleanup must not hide the original Docker/APT diagnostic.
+            print(f"Warning: could not remove resolver container {name}: {error}", file=sys.stderr)
 
 
 def resolve():
@@ -197,14 +223,14 @@ def resolve():
     output_dir.mkdir(exist_ok=True)
     ca = fetch(CA_URL)
     (output_dir / "apt-ca.pem").write_bytes(ca)
-    image = ubuntu_image()
+    image, platform_images = ubuntu_image()
     snapshot = datetime.now(timezone.utc).strftime("%Y%m%dT%H0000Z")
     nix_version = validated((ROOT / "apt/nix-version").read_text().strip(),
                             r"[0-9][a-zA-Z0-9.+:~_-]+", "Nix package pin")
     rust_names = {"amd64": "{tool}-x86_64-unknown-linux-gnu.tar.gz",
                   "arm64": "{tool}-aarch64-unknown-linux-gnu.tar.gz"}
     with ThreadPoolExecutor(max_workers=8) as pool:
-        apt_jobs = {arch: pool.submit(apt_plan, image, snapshot, nix_version, arch)
+        apt_jobs = {arch: pool.submit(apt_plan, platform_images[arch], snapshot, nix_version, arch)
                     for arch in ("amd64", "arm64")}
         jobs = {
             "node": pool.submit(node_tool), "pnpm": pool.submit(pnpm_tool),

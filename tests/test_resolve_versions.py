@@ -120,6 +120,50 @@ class ResolutionTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 versions.parse_apt_plan(plan.replace("# NIX-CANDIDATE", line + "\n# NIX-CANDIDATE"))
 
+    @patch.object(versions.subprocess, "run")
+    def test_apt_failure_reports_platform_exit_code_and_docker_or_apt_output(self, run):
+        for status, diagnostic in ((125, "cannot overwrite digest sha256:abc"),
+                                   (100, "E: Version '2.34.3+dfsg-1' was not found")):
+            with self.subTest(status=status):
+                run.side_effect = [subprocess.CalledProcessError(
+                    status, ["docker", "run"], output="APT progress", stderr=diagnostic),
+                    subprocess.CompletedProcess([], 0)]
+                with self.assertRaises(RuntimeError) as error:
+                    versions.apt_plan("ubuntu@sha256:abc", "20261019T200000Z", "2.34.3+dfsg-1", "amd64")
+                message = str(error.exception)
+                for expected in ("linux/amd64", f"status {status}", "APT progress", diagnostic):
+                    self.assertIn(expected, message)
+                self.assertEqual(run.call_args.args[0][:3], ["docker", "rm", "-f"])
+
+    @patch.object(versions.subprocess, "run")
+    def test_apt_timeout_keeps_partial_output_when_cleanup_also_times_out(self, run):
+        run.side_effect = [subprocess.TimeoutExpired(["docker", "run"], 300,
+                           output=b"partial plan", stderr=b"network stalled"),
+                           subprocess.TimeoutExpired(["docker", "rm"], 30)]
+        with patch("sys.stderr"), self.assertRaises(RuntimeError) as error:
+            versions.apt_plan("ubuntu@sha256:abc", "20261019T200000Z", "2.34.3+dfsg-1", "arm64")
+        for expected in ("linux/arm64", "timed out after 300s", "partial plan", "network stalled"):
+            self.assertIn(expected, str(error.exception))
+
+    def test_resolve_runs_apt_with_child_digests_and_builds_with_index(self):
+        images = {arch: "ubuntu@sha256:" + char * 64 for arch, char in (("amd64", "a"), ("arm64", "b"))}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "apt").mkdir()
+            (root / "apt/nix-version").write_text("2.34.3+dfsg-1")
+            with patch.object(versions, "ROOT", root), \
+                    patch.object(versions, "fetch", return_value=b"test CA"), \
+                    patch.object(versions, "ubuntu_image", return_value=("ubuntu@index", images)), \
+                    patch.object(versions, "apt_plan", return_value=({"nix-bin": "2.34.3+dfsg-1"}, "2.34.3+dfsg-1")) as plan, \
+                    patch.object(versions, "node_tool", return_value={}), \
+                    patch.object(versions, "pnpm_tool", return_value={}), \
+                    patch.object(versions, "github_tool", return_value={}):
+                result = versions.resolve()
+            self.assertEqual(result["build_args"]["UBUNTU_IMAGE"], "ubuntu@index")
+            self.assertEqual({call.args[3]: call.args[0] for call in plan.call_args_list}, images)
+            for arch in images:
+                self.assertEqual((root / f".build/apt/{arch}.txt").read_text(), "nix-bin=2.34.3+dfsg-1\n")
+
     @patch.object(versions, "fetch")
     @patch.object(versions, "fetch_json")
     def test_node_stays_on_24_and_requires_both_architectures(self, fetch_json, fetch):
@@ -174,10 +218,24 @@ class ResolutionTests(unittest.TestCase):
     @patch.object(versions, "fetch")
     @patch.object(versions, "fetch_json", return_value={"token": "test-token"})
     def test_ubuntu_index_digest_and_platforms(self, fetch_json, fetch):
-        raw = json.dumps(published()).encode()
-        fetch.return_value = raw
-        self.assertEqual("ubuntu@sha256:" + versions.hashlib.sha256(raw).hexdigest(), versions.ubuntu_image())
         manifest = published()
+        for item, char in zip(manifest["manifests"], ("a", "b")):
+            item["digest"] = "sha256:" + char * 64
+        raw = json.dumps(manifest).encode()
+        fetch.return_value = raw
+        index, images = versions.ubuntu_image()
+        self.assertEqual("ubuntu@sha256:" + versions.hashlib.sha256(raw).hexdigest(), index)
+        self.assertEqual(images, {"amd64": "ubuntu@sha256:" + "a" * 64, "arm64": "ubuntu@sha256:" + "b" * 64})
+        manifest["manifests"][0]["digest"] = "invalid"
+        fetch.return_value = json.dumps(manifest).encode()
+        with self.assertRaises(ValueError):
+            versions.ubuntu_image()
+        manifest["manifests"][0]["digest"] = "sha256:" + "a" * 64
+        manifest["manifests"].append(manifest["manifests"][0])
+        fetch.return_value = json.dumps(manifest).encode()
+        with self.assertRaises(ValueError):
+            versions.ubuntu_image()
+        manifest["manifests"].pop()
         manifest["manifests"].pop()
         fetch.return_value = json.dumps(manifest).encode()
         with self.assertRaises(ValueError):
