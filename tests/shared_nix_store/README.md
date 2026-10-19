@@ -10,7 +10,7 @@ python3 tests/shared_nix_store/acceptance.py --image colony-base:local --platfor
 python3 tests/shared_nix_store/acceptance.py --image colony-base:local --platform linux/amd64
 ```
 
-This is the suite used by CI before publishing `shared-nix-v1`. It implements
+This is the suite used by CI before publishing `ghcr.io/colony-2/base2:latest`. It implements
 the provider-initialized contract: one initializer prepares a volume before
 concurrent use, and the image's `base-store-preflight` validates attachments.
 It tests actual c2j recipe subprocesses, offline base tools with an empty mount,

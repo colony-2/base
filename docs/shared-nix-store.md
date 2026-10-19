@@ -1,6 +1,6 @@
 # Pulse integration: shared live Nix store v1
 
-The migration image is `ghcr.io/colony-2/base:shared-nix-v1`. It ships Nix 2.34.3
+The shared-store image is `ghcr.io/colony-2/base2:latest`. It ships Nix 2.34.3
 (`nix-bin=2.34.3+dfsg-1`) outside an empty `/nix`. It advertises:
 
 | Label | Value |
@@ -49,7 +49,7 @@ For an isolated local demonstration (the shell below represents the provider's
 single initializer):
 
 ```sh
-image=ghcr.io/colony-2/base:shared-nix-v1
+image=ghcr.io/colony-2/base2:latest
 volume=colony-nix-demo
 docker volume create "$volume"
 docker run --rm --mount "type=volume,src=$volume,dst=/nix,volume-nocopy" \

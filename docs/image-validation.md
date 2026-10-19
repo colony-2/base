@@ -6,8 +6,9 @@ The final local image is `colony-base:ubuntu-shared`, OCI index:
 `sha256:af69014cf4cbcb4dcc1c3b8cf7ec7762d018c76b26f61f987a4841636a9b3dbb`
 
 This is implementation evidence, not a claim that the image has been pushed or
-that Pulse integration has shipped. CI is configured to publish `shared-nix-v1`
-after both architecture checks pass; `latest` remains the old image during rollout.
+that Pulse integration has shipped. CI is configured to publish `ghcr.io/colony-2/base2:latest`
+after both architecture checks pass. The separate `base` image retains its original
+contract.
 
 ## Inputs
 

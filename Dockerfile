@@ -50,7 +50,7 @@ ENV HOME=/root \
 LABEL io.colony-2.base.nix-shared-store="1" \
       io.colony-2.base.nix-store-compat="colony-nix-store-v1" \
       io.colony-2.base.nix-store-initialization="provider" \
-      org.opencontainers.image.title="Colony 2 base" \
+      org.opencontainers.image.title="Colony 2 base2" \
       org.opencontainers.image.description="Ubuntu development tools with an empty shared Nix store" \
       org.opencontainers.image.version="shared-nix-v1"
 WORKDIR /workspace

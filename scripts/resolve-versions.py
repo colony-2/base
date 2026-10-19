@@ -283,7 +283,7 @@ def needs_build(manifest, expected, revision):
     )
 
 
-def published_manifest(image, tag="shared-nix-v1"):
+def published_manifest(image, tag="latest"):
     result = subprocess.run(
         ["docker", "buildx", "imagetools", "inspect", "--raw", f"{image}:{tag}"],
         text=True, capture_output=True, check=False,
@@ -301,7 +301,7 @@ def published_manifest(image, tag="shared-nix-v1"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", help="GHCR image to compare on scheduled runs")
-    parser.add_argument("--tag", default="shared-nix-v1")
+    parser.add_argument("--tag", default="latest")
     parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", ""))
     parser.add_argument("--check", action="store_true", help="Skip unchanged published inputs")
     options = parser.parse_args()

@@ -1,6 +1,6 @@
-# Colony 2 base image
+# Colony 2 base2 image
 
-`ghcr.io/colony-2/base:shared-nix-v1` is the Ubuntu 26.04 migration image for
+`ghcr.io/colony-2/base2:latest` is the Ubuntu 26.04 shared-store image for
 **linux/amd64 and linux/arm64**. It includes Bash, Nix, Node.js **24**, Python,
 pnpm, uv/uvx, c2j, and the development tools below. It runs as root, opens Bash
 by default, and uses `/workspace` as its working directory.
@@ -11,8 +11,9 @@ containers execute installed `/nix/store/...` paths directly, including after
 the producer is removed. There is no image-store seed, per-container restoration,
 export hook, Nix wrapper, daemon, or application-wide lock.
 
-The existing `latest` tag is retained during the Pulse migration. This repository
-now publishes `shared-nix-v1`; promotion to `latest` is a separate rollout decision.
+This repository publishes `ghcr.io/colony-2/base2:latest`. The separate image name
+distinguishes its shared-store API from the existing `ghcr.io/colony-2/base:latest`
+contract.
 See [the Pulse integration contract](docs/shared-nix-store.md).
 
 | Category | Tools |
@@ -58,9 +59,9 @@ already in the shared store work offline; resolving flake sources/selectors can
 still need network access in a fresh container.
 
 ```sh
-docker run --rm ghcr.io/colony-2/base:shared-nix-v1 c2j version
-docker run --rm ghcr.io/colony-2/base:shared-nix-v1 nix run nixpkgs#hello
-docker run --rm -it -v "$PWD:/workspace" ghcr.io/colony-2/base:shared-nix-v1
+docker run --rm ghcr.io/colony-2/base2:latest c2j version
+docker run --rm ghcr.io/colony-2/base2:latest nix run nixpkgs#hello
+docker run --rm -it -v "$PWD:/workspace" ghcr.io/colony-2/base2:latest
 ```
 
 Without a mount, ordinary Nix use initializes an ephemeral container-local store.
@@ -95,8 +96,8 @@ determine the hourly fingerprint.
 
 Each architecture is loaded and tested in disposable containers after building.
 Tests never leave a populated store in an image layer. Only after both pass does
-the workflow publish the multi-platform `shared-nix-v1` tag and immutable
-`shared-nix-build-<run-id>-<attempt>` tag. A failed check leaves the shared tag
+the workflow publish the multi-platform `base2:latest` tag and immutable
+`base2:shared-nix-build-<run-id>-<attempt>` tag. A failed check leaves `base2:latest`
 unchanged. Intermediate architecture tags are unique to the run.
 
 The image records resolved inputs in `/usr/local/share/base/versions.json` and

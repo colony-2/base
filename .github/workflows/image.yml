@@ -1,4 +1,4 @@
-name: Build base image
+name: Build base2 image
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: base-image-${{ github.event.pull_request.number || 'publish' }}
+  group: base2-image-${{ github.event.pull_request.number || 'publish' }}
   cancel-in-progress: false
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
 
       - name: Image name
         id: meta
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/base2" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -46,14 +46,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve inputs and compare the migration image
+      - name: Resolve inputs and compare the base2 image
         id: versions
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.meta.outputs.image }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          args=(--image "$IMAGE" --tag shared-nix-v1 --revision "$GITHUB_SHA")
+          args=(--image "$IMAGE" --tag latest --revision "$GITHUB_SHA")
           if [[ "$EVENT_NAME" == schedule ]]; then args+=(--check); fi
           python3 scripts/resolve-versions.py "${args[@]}"
 
@@ -74,7 +74,7 @@ jobs:
             build_options=(--platform "linux/$arch" "${args[@]}" -t "$tag"
               --label "org.opencontainers.image.revision=$GITHUB_SHA"
               --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
-              --cache-from "type=registry,ref=$IMAGE:shared-nix-v1" --cache-to type=inline)
+              --cache-from "type=registry,ref=$IMAGE:latest" --cache-to type=inline)
             docker buildx build "${build_options[@]}" --load .
             python3 tests/shared_nix_store/acceptance.py --image "$tag" --platform "linux/$arch" \
               2>&1 | tee ".build/acceptance/$arch.log"
@@ -86,14 +86,14 @@ jobs:
             fi
           done
 
-      - name: Publish the tested multi-platform migration image
+      - name: Publish the tested multi-platform base2 image
         if: steps.versions.outputs.changed == 'true' && github.event_name != 'pull_request'
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           FINGERPRINT: ${{ steps.versions.outputs.fingerprint }}
         run: |
           docker buildx imagetools create \
-            --tag "$IMAGE:shared-nix-v1" \
+            --tag "$IMAGE:latest" \
             --tag "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --annotation "index:io.colony-2.base.inputs=$FINGERPRINT" \
             --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
@@ -112,15 +112,15 @@ jobs:
           {
             echo "Job status: $STATUS"
             if [[ "$STATUS" != success ]]; then
-              echo 'Failed: the shared-nix-v1 publication was not completed.'
+              echo 'Failed: the latest publication was not completed.'
             elif [[ "$CHANGED" != true ]]; then
               echo 'Skipped: resolved inputs and source revision are unchanged.'
             elif [[ "$EVENT_NAME" == pull_request ]]; then
               echo 'Validated amd64 and arm64; no image published.'
             else
-              echo "Published $IMAGE:shared-nix-v1 and shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT."
+              echo "Published $IMAGE:latest and shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT."
             fi
-            echo 'The previous latest tag is retained for the Pulse migration.'
+            echo 'The base2 image has a separate contract from the existing base image.'
             if [[ -f .build/versions.json ]]; then
               echo '```json'
               cat .build/versions.json
