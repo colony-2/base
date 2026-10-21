@@ -84,9 +84,11 @@ only when the selected inputs or source revision change. PRs never publish.
 
 The resolver tracks the Ubuntu image digest, the complete selected APT package
 closure for **both** architectures (including base-package security updates),
-and the versions/checksums of all external tools. APT resolution and installation
-use the same Ubuntu archive snapshot. A timestamp-only snapshot change does not
-trigger a rebuild. The installed package closure must exactly match resolution.
+and the versions/checksums of all external tools. Resolution checks the current
+Ubuntu archive snapshot every time. When the base image and complete APT closure
+match the published image, installation retains that image's snapshot; otherwise
+it uses the newly resolved snapshot. The installed package closure must exactly
+match resolution. A timestamp-only snapshot change does not trigger a rebuild.
 
 Nix stays on its certified pin across tool updates. The available Nix candidate
 is recorded, but a newer Nix package requires a reviewed pin change and store
@@ -99,6 +101,17 @@ Tests never leave a populated store in an image layer. Only after both pass does
 the workflow publish the multi-platform `base2:latest` tag and immutable
 `base2:shared-nix-build-<run-id>-<attempt>` tag. A failed check leaves `base2:latest`
 unchanged. Intermediate architecture tags are unique to the run.
+
+Layer reuse comes from inline BuildKit metadata in the published GHCR image;
+there is no separate cache image or Actions cache. APT mounts only its target
+architecture's package list. Each upstream tool has its own final-image layer
+and artifact input file; the complete reporting manifest is copied afterward.
+Changing a tool still invalidates later dependent layers, so frequently updated
+c2j is installed last. See [image reuse and validation](docs/image-reuse.md).
+
+CI currently runs both architectures sequentially on an amd64 runner, using
+QEMU for arm64. Build, acceptance tests, and publication have separate named
+steps for each architecture so their durations are visible.
 
 The image records resolved inputs in `/usr/local/share/base/versions.json` and
 its installed APT packages in `/usr/local/share/base/packages.json`. The index
@@ -113,7 +126,7 @@ Run from the repository root; set `GH_TOKEN` if GitHub API rate limits require i
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 scripts/resolve-versions.py
+python3 scripts/resolve-versions.py --image ghcr.io/colony-2/base2
 build_args=()
 while IFS= read -r arg; do build_args+=(--build-arg "$arg"); done < .build/build-args.env
 

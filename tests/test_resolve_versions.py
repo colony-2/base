@@ -71,7 +71,7 @@ class ChangeDetectionTests(unittest.TestCase):
 
 
 class ResolutionTests(unittest.TestCase):
-    @patch.object(versions, "resolve", return_value={"build_args": {"UBUNTU_IMAGE": "ubuntu@sha256:" + "a" * 64, "APT_SNAPSHOT": "20261015T020000Z"}, "apt": {"arm64": {"bash": "1"}}})
+    @patch.object(versions, "resolve", return_value={"build_args": {"UBUNTU_IMAGE": "ubuntu@sha256:" + "a" * 64, "APT_SNAPSHOT": "20261015T020000Z"}, "apt": {"arm64": {"bash": "1"}}, "tools": {}})
     @patch.object(versions, "published_manifest")
     def test_push_forces_build_and_schedule_skips_identical_inputs(self, inspect, resolve):
         import contextlib
@@ -110,6 +110,97 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual(versions.fingerprint(first), versions.fingerprint(second))
         second["apt"]["amd64"]["libc6"] = "2"
         self.assertNotEqual(versions.fingerprint(first), versions.fingerprint(second))
+
+    def snapshot_inputs(self):
+        return {"build_args": {"UBUNTU_IMAGE": "ubuntu@digest", "APT_SNAPSHOT": "20261021T220000Z"},
+                "apt": {"amd64": {"bash": "1"}, "arm64": {"bash": "1"}},
+                "tools": {"c2j": {"version": "1"}}}
+
+    def snapshot_manifest(self, inputs):
+        return {"annotations": {versions.APT_INPUTS_ANNOTATION: versions.apt_fingerprint(inputs),
+                                versions.APT_SNAPSHOT_ANNOTATION: "20261019T200000Z"}}
+
+    def test_unchanged_apt_reuses_snapshot_despite_new_tools_and_observation_time(self):
+        inputs = self.snapshot_inputs()
+        manifest = self.snapshot_manifest(inputs)
+        inputs["tools"]["c2j"]["version"] = "2"
+        expected = versions.fingerprint(inputs)
+        versions.select_apt_snapshot(inputs, manifest)
+        self.assertEqual(inputs["build_args"]["APT_SNAPSHOT"], "20261019T200000Z")
+        self.assertEqual(inputs["resolution_snapshot"], "20261021T220000Z")
+        self.assertEqual(versions.fingerprint(inputs), expected)
+
+    def test_new_base_or_package_closure_uses_current_snapshot(self):
+        for change in ("base", "amd64", "arm64"):
+            with self.subTest(change=change):
+                inputs = self.snapshot_inputs()
+                manifest = self.snapshot_manifest(inputs)
+                if change == "base":
+                    inputs["build_args"]["UBUNTU_IMAGE"] = "ubuntu@new-digest"
+                else:
+                    inputs["apt"][change]["bash"] = "2"
+                versions.select_apt_snapshot(inputs, manifest)
+                self.assertEqual(inputs["build_args"]["APT_SNAPSHOT"], "20261021T220000Z")
+
+    def test_first_publication_and_old_images_without_snapshot_metadata(self):
+        for manifest in ({}, published(), {"annotations": {versions.APT_INPUTS_ANNOTATION: "old"}}):
+            with self.subTest(manifest=manifest):
+                inputs = self.snapshot_inputs()
+                versions.select_apt_snapshot(inputs, manifest)
+                self.assertEqual(inputs["build_args"]["APT_SNAPSHOT"], "20261021T220000Z")
+
+    def test_invalid_or_future_published_snapshot_fails_closed(self):
+        for snapshot in ("20261022T000000Z", "20261319T200000Z", "bad\nvalue", "20261019T200000Z;id"):
+            with self.subTest(snapshot=snapshot), self.assertRaises(ValueError):
+                inputs = self.snapshot_inputs()
+                manifest = self.snapshot_manifest(inputs)
+                manifest["annotations"][versions.APT_SNAPSHOT_ANNOTATION] = snapshot
+                versions.select_apt_snapshot(inputs, manifest)
+
+    def test_tool_install_inputs_ignore_reporting_and_other_architecture(self):
+        inputs = self.snapshot_inputs()
+        data = {"version": "1.2.3", "artifacts": {
+            arch: {"url": f"https://example.com/{arch}", "sha256": arch}
+            for arch in ("amd64", "arm64")}}
+        inputs["tools"] = {"c2j": data, "pnpm": {**data, "native_artifacts": data["artifacts"]}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            versions.write_tool_inputs(inputs, root)
+            path = root / "tools/arm64/c2j.json"
+            initial = path.read_bytes()
+            pnpm = json.loads((root / "tools/arm64/pnpm.json").read_text())["tools"]["pnpm"]
+            self.assertEqual(set(pnpm["native_artifacts"]), {"arm64"})
+            inputs["resolution_snapshot"] = "20261022T000000Z"
+            inputs["nix"] = {"candidate": "new"}
+            data["artifacts"]["amd64"]["sha256"] = "new-amd64"
+            versions.write_tool_inputs(inputs, root)
+            self.assertEqual(path.read_bytes(), initial)
+            data["artifacts"]["arm64"]["sha256"] = "new-arm64"
+            versions.write_tool_inputs(inputs, root)
+            self.assertNotEqual(path.read_bytes(), initial)
+
+    @patch.object(versions, "write_tool_inputs")
+    @patch.object(versions, "published_manifest")
+    @patch.object(versions, "resolve")
+    def test_push_reads_published_snapshot_without_skipping_build(self, resolve, inspect, write_tools):
+        import contextlib
+        import io
+        import os
+
+        resolve.return_value = self.snapshot_inputs()
+        inspect.return_value = self.snapshot_manifest(resolve.return_value)
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path.cwd()
+            try:
+                os.chdir(directory)
+                argv = ["resolve-versions.py", "--image", "ghcr.io/example/base2"]
+                with patch("sys.argv", argv), contextlib.redirect_stdout(io.StringIO()) as output:
+                    versions.main()
+                inspect.assert_called_once_with("ghcr.io/example/base2", "latest")
+                self.assertIn("Build required: True", output.getvalue())
+                self.assertIn("APT_SNAPSHOT=20261019T200000Z", Path(".build/build-args.env").read_text())
+            finally:
+                os.chdir(original)
 
     def test_apt_plan_captures_base_upgrades_and_new_dependencies(self):
         plan = "bash=1\nlibc6=2\n# PLAN\nInst bash [1] (3 Ubuntu:26.04 [arm64])\nInst nix-bin (2.34.3+dfsg-1 Ubuntu:26.04 [arm64])\nInst libfoo:arm64 (1:2.0-1 Ubuntu:26.04 [arm64])\n# NIX-CANDIDATE\n  Candidate: 2.35.0\n"

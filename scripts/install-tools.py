@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install only checksum-verified, resolved upstream artifacts into /out."""
+"""Install only checksum-verified, resolved upstream artifacts into the runtime filesystem."""
 import hashlib
 import json
 import os
@@ -31,7 +31,7 @@ def download(artifact, destination):
 
 def install(manifest, arch, root):
     bin_dir = root / 'usr/local/bin'
-    bin_dir.mkdir(parents=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
     for tool, data in manifest['tools'].items():
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
@@ -88,4 +88,4 @@ def install(manifest, arch, root):
 
 
 if __name__ == '__main__':
-    install(json.loads(Path(sys.argv[1]).read_text()), sys.argv[2], Path('/out'))
+    install(json.loads(Path(sys.argv[1]).read_text()), sys.argv[2], Path('/'))

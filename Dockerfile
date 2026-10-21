@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG UBUNTU_IMAGE=ubuntu:26.04
-FROM ${UBUNTU_IMAGE} AS apt-runtime
+FROM ${UBUNTU_IMAGE} AS runtime
 ARG APT_SNAPSHOT
 ARG TARGETARCH
 SHELL ["/bin/sh", "-eu", "-c"]
@@ -8,31 +8,49 @@ SHELL ["/bin/sh", "-eu", "-c"]
 # closure from one signed Ubuntu snapshot; retain a usable APT/dpkg installation.
 RUN --mount=type=bind,source=scripts/configure-apt.sh,target=/inputs/scripts/configure-apt.sh \
     --mount=type=bind,source=scripts/verify-apt.py,target=/inputs/scripts/verify-apt.py \
-    --mount=type=bind,source=.build/apt,target=/inputs/.build/apt \
+    --mount=type=bind,source=.build/apt/${TARGETARCH}.txt,target=/inputs/apt.txt \
     --mount=type=bind,source=.build/apt-ca.pem,target=/inputs/.build/apt-ca.pem \
     /bin/sh /inputs/scripts/configure-apt.sh "${APT_SNAPSHOT}" && \
     apt-get update -o APT::Update::Error-Mode=any && \
-    DEBIAN_FRONTEND=noninteractive xargs -a "/inputs/.build/apt/${TARGETARCH}.txt" \
+    DEBIAN_FRONTEND=noninteractive xargs -a /inputs/apt.txt \
       apt-get install -y --no-install-recommends --no-remove && \
-    python3 /inputs/scripts/verify-apt.py "/inputs/.build/apt/${TARGETARCH}.txt" && \
+    python3 /inputs/scripts/verify-apt.py /inputs/apt.txt && \
     apt-mark hold nix-bin && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-FROM apt-runtime AS resolved-runtime
-COPY .build/versions.json /usr/local/share/base/versions.json
-
-FROM resolved-runtime AS upstream-tools
-ARG TARGETARCH
+# Install directly into final-image layers so the inline metadata in the
+# published image can reuse them on a fresh builder. Stable, narrow inputs keep
+# reporting timestamps and unrelated architecture changes out of these keys.
 RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
-    python3 /tmp/install-tools.py /usr/local/share/base/versions.json "${TARGETARCH}"
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/node.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
 
-FROM resolved-runtime AS runtime
-COPY --from=upstream-tools /out/ /
+RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/pnpm.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
+
+RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/yq.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
+
+RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/uv.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
+
+RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/ruff.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
+
+RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
+    --mount=type=bind,source=.build/tools/${TARGETARCH}/c2j.json,target=/tmp/tool.json \
+    python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
+
 COPY nix/runtime.conf /etc/nix/nix.conf
 COPY nix/registry.json /etc/nix/registry.json
 COPY --chmod=755 scripts/nix-deny-build /usr/local/libexec/nix-deny-build
 COPY --chmod=755 scripts/smoke-test.sh /usr/local/bin/base-smoke-test
 COPY --chmod=755 scripts/store-preflight.py /usr/local/bin/base-store-preflight
+COPY .build/versions.json /usr/local/share/base/versions.json
 RUN mkdir -p /nix /workspace /root/.local/state/nix/profiles && \
     ln -s profiles/profile /root/.local/state/nix/profile && \
     ln -s /root/.local/state/nix/profile /root/.nix-profile && \

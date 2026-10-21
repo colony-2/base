@@ -141,3 +141,36 @@ Validation of this resolver change:
 
 This validation covers the resolver fix. It does not claim a rerun of GitHub CI
 or new image builds; the runtime filesystem is unchanged by this patch.
+
+## Published-image reuse validated on 2026-10-21
+
+Built the revised Dockerfile for both platforms on Docker 29.5.2 (native arm64,
+emulated amd64), with isolated BuildKit 0.33.1 builders and a disposable local
+registry. The Ubuntu index was `c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944`
+and the installation snapshot was `20261021T220000Z`.
+
+| Check | amd64 | arm64 |
+| --- | --- | --- |
+| Build and load through the CI build script | Pass | Pass |
+| Production acceptance suite | 13/13 (136.442 s) | 13/13 (70.017 s) |
+| Fresh builder: later observation and unrelated architecture changes | All 7 installation vertices cached | All 7 installation vertices cached |
+| Fresh builder: changed c2j artifact input | Only c2j installs; preceding 6 vertices cached | Only c2j installs; preceding 6 vertices cached |
+| OCI re-export through the CI build script | Pass | Pass |
+| Inline metadata retained after multi-platform publication | Pass | Pass |
+
+The fresh builders imported only the baseline image's inline metadata and layers.
+No separate cache export or shared builder state was available. Structured
+BuildKit progress distinguishes cache hits from downloading/extracting their
+layers. The c2j case deliberately changes its artifact URL fragment while keeping
+the checksum and downloaded bytes valid.
+
+Combined local publication preserved both architecture descriptors, input and
+snapshot annotations, and the source revision. Reading those actual annotations
+retained the installation snapshot for a later observation and reported unchanged
+inputs correctly. All 28 unit tests, Ruff, ShellCheck, and actionlint passed.
+
+Evidence is in `.build/cache-validation/`; reproducible instructions and limits
+are in [image reuse](image-reuse.md). This validates correctness and image-layer
+reuse, not a GitHub-hosted timing improvement. The local registry has different
+network costs, and CI still uses amd64 hardware with arm64 emulation. CI now
+reports build, acceptance, and publication durations separately per architecture.

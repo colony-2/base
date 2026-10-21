@@ -15,3 +15,7 @@
 !.build/apt-ca.pem
 !.build/apt/
 !.build/apt/*.txt
+!.build/tools/
+!.build/tools/amd64/
+!.build/tools/arm64/
+!.build/tools/*/*.json

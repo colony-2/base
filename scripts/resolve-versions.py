@@ -19,6 +19,8 @@ from pathlib import Path
 
 PLATFORMS = {("linux", "amd64"), ("linux", "arm64")}
 ANNOTATION = "io.colony-2.base.inputs"
+APT_INPUTS_ANNOTATION = "io.colony-2.base.apt-inputs"
+APT_SNAPSHOT_ANNOTATION = "io.colony-2.base.apt-snapshot"
 
 
 def fetch(url, headers=None):
@@ -265,9 +267,46 @@ def fingerprint(inputs):
     # A timestamp-only change must not trigger an hourly publication.
     value = json.loads(json.dumps(inputs))
     value.pop("fingerprint", None)
+    value.pop("resolution_snapshot", None)
     value.get("build_args", {}).pop("APT_SNAPSHOT", None)
     value.get("nix", {}).pop("candidate", None)
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def apt_fingerprint(inputs):
+    # A snapshot remains usable when the base and exact package closure match.
+    # Tool releases, source changes and the observation time do not affect it.
+    value = {"base": inputs["build_args"]["UBUNTU_IMAGE"], "packages": inputs["apt"]}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def select_apt_snapshot(inputs, manifest):
+    current = inputs["build_args"]["APT_SNAPSHOT"]
+    inputs["resolution_snapshot"] = current
+    annotations = manifest.get("annotations", {})
+    previous = annotations.get(APT_SNAPSHOT_ANNOTATION, "")
+    if annotations.get(APT_INPUTS_ANNOTATION) != apt_fingerprint(inputs) or not previous:
+        return
+    # Fail closed on corrupt metadata; never interpolate an unchecked timestamp.
+    validated(previous, r"[0-9]{8}T[0-9]{6}Z", "published APT snapshot")
+    datetime.strptime(previous, "%Y%m%dT%H%M%SZ")
+    if previous > current:
+        raise ValueError("Published APT snapshot is newer than the resolution snapshot")
+    inputs["build_args"]["APT_SNAPSHOT"] = previous
+
+
+def write_tool_inputs(inputs, output_dir):
+    # Each RUN sees only one tool for its target architecture, not the full
+    # reporting manifest (which includes timestamps and unrelated releases).
+    for arch in ("amd64", "arm64"):
+        directory = output_dir / "tools" / arch
+        directory.mkdir(parents=True, exist_ok=True)
+        for tool, data in inputs["tools"].items():
+            selected = {"artifacts": {arch: data["artifacts"][arch]}}
+            if "native_artifacts" in data:
+                selected["native_artifacts"] = {arch: data["native_artifacts"][arch]}
+            (directory / f"{tool}.json").write_text(
+                json.dumps({"tools": {tool: selected}}, sort_keys=True) + "\n")
 
 
 def needs_build(manifest, expected, revision):
@@ -300,7 +339,7 @@ def published_manifest(image, tag="latest"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", help="GHCR image to compare on scheduled runs")
+    parser.add_argument("--image", help="Published image for snapshot reuse and scheduled comparison")
     parser.add_argument("--tag", default="latest")
     parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", ""))
     parser.add_argument("--check", action="store_true", help="Skip unchanged published inputs")
@@ -309,11 +348,14 @@ def main():
         parser.error("--check requires --image and --revision")
 
     versions = resolve()
+    manifest = published_manifest(options.image, options.tag) if options.image else {}
+    select_apt_snapshot(versions, manifest)
     args = versions["build_args"]
     digest = fingerprint(versions)
-    changed = not options.check or needs_build(published_manifest(options.image, options.tag), digest, options.revision)
+    changed = not options.check or needs_build(manifest, digest, options.revision)
     output_dir = Path(".build")
     output_dir.mkdir(exist_ok=True)
+    write_tool_inputs(versions, output_dir)
     versions["fingerprint"] = digest
     (output_dir / "versions.json").write_text(json.dumps(versions, indent=2) + "\n")
     build_args = "\n".join(f"{key}={value}" for key, value in args.items())
@@ -323,6 +365,7 @@ def main():
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"changed={str(changed).lower()}\nfingerprint={digest}\n")
+            output.write(f"apt_inputs={apt_fingerprint(versions)}\napt_snapshot={args['APT_SNAPSHOT']}\n")
             output.write(f"build_args<<BUILD_ARGS\n{build_args}\nBUILD_ARGS\n")
 
 
