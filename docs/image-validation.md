@@ -172,5 +172,34 @@ inputs correctly. All 28 unit tests, Ruff, ShellCheck, and actionlint passed.
 Evidence is in `.build/cache-validation/`; reproducible instructions and limits
 are in [image reuse](image-reuse.md). This validates correctness and image-layer
 reuse, not a GitHub-hosted timing improvement. The local registry has different
-network costs, and CI still uses amd64 hardware with arm64 emulation. CI now
-reports build, acceptance, and publication durations separately per architecture.
+network costs. At this validation, CI used amd64 hardware with arm64 emulation
+and reported build, acceptance, and publication durations separately per architecture.
+
+## Native CI and fast comparison validated on 2026-10-22
+
+The last run before this change spent 2m23s building amd64 and 1m49s testing it,
+versus 6m32s and 10m23s for emulated arm64, sequentially
+([run](https://github.com/colony-2/base/actions/runs/39696896506)). The new matrix
+assigns each architecture a native runner and allows both jobs to run in parallel.
+
+Local validation of the workflow/resolver/publication change:
+
+- All 40 unit tests pass, including authenticated-index parsing, signature
+  rejection, resolution-key invalidation, skipping Docker while checking tools,
+  metadata-only refresh decisions, and publication by exact architecture digests.
+- A full live resolution passed; a second live resolution with supplied matching
+  image metadata took **3.000 seconds** in a container with no Docker CLI/socket.
+  It selected identical package/tool inputs. This measures input discovery,
+  excluding image-index retrieval, runner startup, and Actions setup.
+- The current full APT-plan annotation is about 17 KB. A local OCI registry test
+  published two small architecture fixtures by digest, then refreshed comparison
+  metadata. Both descriptors were unchanged, and the immutable build tag still
+  referenced the original index. These were publication fixtures, not rebuilt
+  production images.
+- The exact resolved-input tar handoff preserves file contents and permissions.
+- actionlint, ShellCheck, and Ruff pass. Logs and fixture indexes are under
+  `.build/native-ci/`.
+
+Native GitHub job scheduling, artifact-service transfers, and CI speedups still
+require the first hosted run of this workflow. The Dockerfile/runtime filesystem
+did not change, so the preceding production acceptance results remain applicable.

@@ -17,5 +17,6 @@ tag="$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
 docker buildx build --progress plain --platform "linux/$arch" "${args[@]}" -t "$tag" \
     --label "org.opencontainers.image.revision=$GITHUB_SHA" \
     --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+    --metadata-file ".build/image-$arch.json" \
     --cache-from "type=registry,ref=$IMAGE:latest" --cache-to type=inline \
     "${output[@]}" .

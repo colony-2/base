@@ -90,6 +90,14 @@ match the published image, installation retains that image's snapshot; otherwise
 it uses the newly resolved snapshot. The installed package closure must exactly
 match resolution. A timestamp-only snapshot change does not trigger a rebuild.
 
+Unchanged checks first verify Ubuntu's signed Release files and compare the
+package-index checksums with the APT plan recorded on the published image index.
+Matching indexes, base, Nix pin, and resolver configuration reuse that plan
+without Docker containers or full package-index downloads. Upstream tool
+releases are still checked. If an unrelated repository update requires solving
+again but selects the same versions, only comparison metadata on `latest` is
+refreshed; image layers and immutable build tags stay the same.
+
 Nix stays on its certified pin across tool updates. The available Nix candidate
 is recorded, but a newer Nix package requires a reviewed pin change and store
 compatibility tests. A missing pin or artifact fails the build. Node stays on
@@ -109,9 +117,12 @@ and artifact input file; the complete reporting manifest is copied afterward.
 Changing a tool still invalidates later dependent layers, so frequently updated
 c2j is installed last. See [image reuse and validation](docs/image-reuse.md).
 
-CI currently runs both architectures sequentially on an amd64 runner, using
-QEMU for arm64. Build, acceptance tests, and publication have separate named
-steps for each architecture so their durations are visible.
+CI builds and tests both architectures in parallel on native runners:
+`ubuntu-24.04` for amd64 and `ubuntu-24.04-arm` for arm64. Each job receives the
+same small resolved-input bundle, imports image layers from GHCR, and exposes
+separate build, test, and publication timings. `latest` is published from the
+exact exported digests only after both jobs succeed, including on partial reruns.
+Only fallback APT planning in the shared resolver uses arm64 emulation.
 
 The image records resolved inputs in `/usr/local/share/base/versions.json` and
 its installed APT packages in `/usr/local/share/base/packages.json`. The index

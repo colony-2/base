@@ -243,6 +243,7 @@ class ResolutionTests(unittest.TestCase):
             (root / "apt").mkdir()
             (root / "apt/nix-version").write_text("2.34.3+dfsg-1")
             with patch.object(versions, "ROOT", root), \
+                    patch.object(versions, "APT_KEYRING", root / "missing-keyring"), \
                     patch.object(versions, "fetch", return_value=b"test CA"), \
                     patch.object(versions, "ubuntu_image", return_value=("ubuntu@index", images)), \
                     patch.object(versions, "apt_plan", return_value=({"nix-bin": "2.34.3+dfsg-1"}, "2.34.3+dfsg-1")) as plan, \

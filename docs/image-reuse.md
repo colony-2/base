@@ -14,6 +14,25 @@ build after this change, also selects the current snapshot. Malformed matching
 metadata and registry/authentication errors fail instead of silently using stale
 or untrusted inputs.
 
+Before invoking Docker, it fetches the three Ubuntu `InRelease` files and verifies
+their signatures with `gpgv` and the Ubuntu archive keyring. It compares SHA256
+checksums of the uncompressed package indexes for all four components and both
+architectures, ignoring timestamp/signature/translation-only changes. The plan
+key also includes the Ubuntu base, Nix pin, bootstrap CA, package list, and
+planning scripts. A matching `io.colony-2.base.apt-plan` annotation supplies the
+previously resolved package sets and Nix candidates. Tool-release checks always
+run. Missing/nonmatching metadata triggers full resolution; bad signatures or
+invalid matching plans fail closed. Hosts without gpgv/the Ubuntu keyring use
+the original Docker resolution path.
+
+If indexes changed but the selected packages/tools did not, CI refreshes only
+the comparison annotations on `latest`, referencing the previously inspected
+index by digest. This preserves its architecture descriptors and attestations;
+it does not change filesystem layers or the immutable build tag. The index
+digest itself changes. Without this refresh, an unrelated Ubuntu package update
+would cause the same expensive resolution on every subsequent hourly check.
+Workflow concurrency serializes these metadata updates with image publications.
+
 `versions.json` distinguishes `resolution_snapshot` from the installation
 `build_args.APT_SNAPSHOT`. These timestamps do not affect hourly change detection.
 The installer still verifies the entire installed APT closure, including base
@@ -32,7 +51,24 @@ tool layers, and changing one tool invalidates later layers. Node and pnpm come
 first, with c2j last. Reporting-only changes do not reinstall packages or tools.
 Changing only the other architecture's tool artifact does not invalidate the
 target architecture's installation. Layers still have to be downloaded on a
-fresh runner, and export, tests, and emulation still take time.
+fresh runner, and export and tests still take time.
+
+## Native CI jobs
+
+One resolver job produces a small tar archive of the exact build inputs. Parallel
+matrix jobs build/test on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64),
+with a host-architecture assertion and no QEMU setup. These are
+[GitHub-hosted native runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+QEMU remains only in the resolver for fallback arm64 APT simulation.
+
+The jobs transfer inputs and exported digest metadata through workflow artifacts,
+not image layers or build caches. Each architecture imports the published GHCR
+image itself. A final job waits for both successful tests and combines their
+exact digests. Per-architecture metadata artifacts support rerunning one failed
+job even when its sibling completed in an earlier run attempt. The resolver's
+artifact name is passed as an output so partial reruns retain the same inputs.
+PRs test both platforms without publishing. Unchanged checks skip both builders;
+metadata-only refreshes do not require a build job.
 
 ## Verification
 
@@ -93,4 +129,4 @@ docker network rm base-cache-validation
 
 This local registry is only a test fixture. CI continues to use the published
 GHCR image and separates each architecture's build, acceptance, and publication
-into named steps. Native arm64 CI runners are not introduced by this change.
+into named steps on its native runner.

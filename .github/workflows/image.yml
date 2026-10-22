@@ -17,26 +17,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  image:
+  resolve:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      changed: ${{ steps.versions.outputs.changed }}
+      refresh_metadata: ${{ steps.versions.outputs.refresh_metadata }}
+      inputs_artifact: ${{ steps.meta.outputs.inputs_artifact }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Test version resolution and change detection
+      - name: Test resolution and publication
         run: python3 -m unittest discover -s tests -v
 
-      - name: Set up emulation
+      # Only the fallback APT simulation needs emulation. Image installation and
+      # acceptance run on native hardware in the matrix below.
+      - name: Set up emulation for APT planning
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
         with:
-          platforms: arm64,amd64
+          platforms: arm64
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Image name
+      - name: Image and input bundle names
         id: meta
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/base2" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/base2" >> "$GITHUB_OUTPUT"
+          echo "inputs_artifact=resolved-inputs-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -57,96 +66,163 @@ jobs:
           if [[ "$EVENT_NAME" == schedule ]]; then args+=(--check); fi
           python3 scripts/resolve-versions.py "${args[@]}"
 
-      # Keep build, acceptance and export timings visible for each architecture.
-      # No test store enters an image layer; latest moves only after BOTH pass.
-      - name: Build amd64
-        if: steps.versions.outputs.changed == 'true'
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: bash scripts/build-image.sh amd64 load
+      - name: Bundle the exact resolved inputs
+        if: steps.versions.outputs.changed == 'true' || steps.versions.outputs.refresh_metadata == 'true'
+        run: |
+          tar -C .build -czf "$RUNNER_TEMP/resolved-inputs.tar.gz" \
+            versions.json published.json build-args.env apt-ca.pem apt tools
 
-      - name: Test amd64
-        if: steps.versions.outputs.changed == 'true'
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
+      - name: Share resolved inputs
+        if: steps.versions.outputs.changed == 'true' || steps.versions.outputs.refresh_metadata == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.meta.outputs.inputs_artifact }}
+          path: ${{ runner.temp }}/resolved-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Build and test ${{ matrix.arch }} (native)
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify native architecture
+        run: test "$(dpkg --print-architecture)" = "$ARCH"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.resolve.outputs.inputs_artifact }}
+          path: ${{ runner.temp }}
+
+      - name: Restore resolved inputs
+        run: |
+          mkdir -p .build
+          tar -C .build -xzf "$RUNNER_TEMP/resolved-inputs.tar.gz"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: bash scripts/build-image.sh "$ARCH" load
+
+      - name: Test
         run: |
           set -euo pipefail
           mkdir -p .build/acceptance
           python3 tests/shared_nix_store/acceptance.py \
-            --image "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-amd64" \
-            --platform linux/amd64 2>&1 | tee .build/acceptance/amd64.log
+            --image "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH" \
+            --platform "linux/$ARCH" 2>&1 | tee ".build/acceptance/$ARCH.log"
 
-      - name: Publish tested amd64
-        if: steps.versions.outputs.changed == 'true' && github.event_name != 'pull_request'
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: bash scripts/build-image.sh amd64 push
+      - name: Publish tested architecture
+        if: github.event_name != 'pull_request'
+        run: bash scripts/build-image.sh "$ARCH" push
 
-      - name: Build arm64
-        if: steps.versions.outputs.changed == 'true'
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: bash scripts/build-image.sh arm64 load
+      # Retain exact digests, not attempt-derived tag names: rerunning a failed
+      # matrix job must still combine correctly with the successful sibling.
+      - name: Share published digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-metadata-${{ matrix.arch }}
+          path: .build/image-${{ matrix.arch }}.json
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
-      - name: Test arm64
-        if: steps.versions.outputs.changed == 'true'
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
+  publish:
+    needs: [resolve, build]
+    if: >-
+      always() && needs.resolve.result == 'success' && github.event_name != 'pull_request' &&
+      ((needs.resolve.outputs.changed == 'true' && needs.build.result == 'success') ||
+       (needs.resolve.outputs.changed == 'false' && needs.resolve.outputs.refresh_metadata == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.resolve.outputs.inputs_artifact }}
+          path: ${{ runner.temp }}
+      - name: Restore resolved manifest
         run: |
-          set -euo pipefail
-          mkdir -p .build/acceptance
-          python3 tests/shared_nix_store/acceptance.py \
-            --image "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-arm64" \
-            --platform linux/arm64 2>&1 | tee .build/acceptance/arm64.log
-
-      - name: Publish tested arm64
-        if: steps.versions.outputs.changed == 'true' && github.event_name != 'pull_request'
+          mkdir -p .build
+          tar -C .build -xzf "$RUNNER_TEMP/resolved-inputs.tar.gz" versions.json published.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.resolve.outputs.changed == 'true'
+        with:
+          pattern: image-metadata-*
+          merge-multiple: true
+          path: .build/images
+      - name: Publish both tested digests
+        if: needs.resolve.outputs.changed == 'true'
         env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: bash scripts/build-image.sh arm64 push
-
-      - name: Publish the tested multi-platform base2 image
-        if: steps.versions.outputs.changed == 'true' && github.event_name != 'pull_request'
+          IMAGE: ${{ needs.resolve.outputs.image }}
+        run: python3 scripts/publish-image.py
+      - name: Refresh comparison metadata without rebuilding
+        if: needs.resolve.outputs.changed == 'false'
         env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-          FINGERPRINT: ${{ steps.versions.outputs.fingerprint }}
-          APT_INPUTS: ${{ steps.versions.outputs.apt_inputs }}
-          APT_SNAPSHOT: ${{ steps.versions.outputs.apt_snapshot }}
-        run: |
-          docker buildx imagetools create \
-            --tag "$IMAGE:latest" \
-            --tag "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --annotation "index:io.colony-2.base.inputs=$FINGERPRINT" \
-            --annotation "index:io.colony-2.base.apt-inputs=$APT_INPUTS" \
-            --annotation "index:io.colony-2.base.apt-snapshot=$APT_SNAPSHOT" \
-            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            --annotation "index:org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-amd64" \
-            "$IMAGE:shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-arm64"
+          IMAGE: ${{ needs.resolve.outputs.image }}
+        run: python3 scripts/publish-image.py --refresh
 
+  summary:
+    needs: [resolve, build, publish]
+    if: always() && needs.resolve.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
       - name: Summarize
-        if: always()
         env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-          CHANGED: ${{ steps.versions.outputs.changed }}
+          IMAGE: ${{ needs.resolve.outputs.image }}
+          CHANGED: ${{ needs.resolve.outputs.changed }}
+          REFRESH: ${{ needs.resolve.outputs.refresh_metadata }}
           EVENT_NAME: ${{ github.event_name }}
-          STATUS: ${{ job.status }}
+          RESOLUTION: ${{ needs.resolve.result }}
+          BUILD: ${{ needs.build.result }}
+          PUBLICATION: ${{ needs.publish.result }}
         run: |
           {
-            echo "Job status: $STATUS"
-            if [[ "$STATUS" != success ]]; then
-              echo 'Failed: the latest publication was not completed.'
+            if [[ "$RESOLUTION" != success ]]; then
+              echo 'Input resolution did not complete successfully.'
+            elif [[ "$CHANGED" != true && "$REFRESH" == true && "$PUBLICATION" != success ]]; then
+              echo 'Comparison metadata refresh did not complete successfully.'
             elif [[ "$CHANGED" != true ]]; then
               echo 'Skipped: resolved inputs and source revision are unchanged.'
+            elif [[ "$BUILD" != success ]]; then
+              echo 'Build/test failed or was cancelled; latest was not published.'
             elif [[ "$EVENT_NAME" == pull_request ]]; then
-              echo 'Validated amd64 and arm64; no image published.'
+              echo 'Validated amd64 and arm64 on native runners; no image published.'
+            elif [[ "$PUBLICATION" != success ]]; then
+              echo 'Multi-platform publication did not complete successfully.'
             else
               echo "Published $IMAGE:latest and shared-nix-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT."
-            fi
-            echo 'The base2 image has a separate contract from the existing base image.'
-            if [[ -f .build/versions.json ]]; then
-              echo '```json'
-              cat .build/versions.json
-              echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"

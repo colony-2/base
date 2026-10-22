@@ -7,8 +7,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +23,8 @@ PLATFORMS = {("linux", "amd64"), ("linux", "arm64")}
 ANNOTATION = "io.colony-2.base.inputs"
 APT_INPUTS_ANNOTATION = "io.colony-2.base.apt-inputs"
 APT_SNAPSHOT_ANNOTATION = "io.colony-2.base.apt-snapshot"
+APT_PLAN_ANNOTATION = "io.colony-2.base.apt-plan"
+APT_KEYRING = Path("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
 
 
 def fetch(url, headers=None):
@@ -220,7 +224,82 @@ def apt_plan(image, snapshot, nix_version, arch):
             print(f"Warning: could not remove resolver container {name}: {error}", file=sys.stderr)
 
 
-def resolve():
+def package_index_checksums(release):
+    """Read only the SHA256 section of an authenticated Ubuntu Release file."""
+    wanted = {f"{component}/binary-{arch}/Packages"
+              for component in ("main", "universe", "restricted", "multiverse")
+              for _, arch in PLATFORMS}
+    checksums = {}
+    in_sha256 = False
+    for line in release.splitlines():
+        if not line.startswith(" "):
+            in_sha256 = line == "SHA256:"
+            continue
+        if in_sha256:
+            fields = line.split()
+            if len(fields) == 3 and fields[2] in wanted:
+                digest, size, name = fields
+                validated(digest, r"[0-9a-f]{64}", "package index checksum")
+                validated(size, r"[0-9]+", "package index size")
+                if name in checksums:
+                    raise ValueError(f"Duplicate package index: {name}")
+                checksums[name] = digest
+    if set(checksums) != wanted:
+        raise ValueError("Ubuntu Release is missing required package index checksums")
+    return checksums
+
+
+def repository_indexes(snapshot):
+    def read_suite(suite):
+        data = fetch(f"https://snapshot.ubuntu.com/ubuntu/{snapshot}/dists/{suite}/InRelease")
+        with tempfile.TemporaryDirectory() as directory:
+            signed = Path(directory) / "InRelease"
+            signed.write_bytes(data)
+            result = subprocess.run(["gpgv", "--keyring", str(APT_KEYRING), "--output", "-", str(signed)],
+                                    capture_output=True, text=True, timeout=30, check=False)
+        if result.returncode:
+            raise RuntimeError(f"Cannot authenticate {suite} package indexes: {result.stderr.strip()}")
+        return package_index_checksums(result.stdout)
+
+    suites = ("resolute", "resolute-updates", "resolute-security")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        return dict(zip(suites, pool.map(read_suite, suites)))
+
+
+def apt_plan_key(image, nix_version, ca, indexes):
+    # Include the planning implementation and its configuration. A source/policy
+    # change must not reuse a plan produced under different resolver semantics.
+    files = ("apt/packages.txt", "scripts/plan-apt.sh", "scripts/configure-apt.sh",
+             "scripts/resolve-versions.py")
+    value = {"base": image, "nix": nix_version, "indexes": indexes,
+             "ca": hashlib.sha256(ca).hexdigest(),
+             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files}}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def previous_apt_plans(manifest, key, nix_version):
+    raw = manifest.get("annotations", {}).get(APT_PLAN_ANNOTATION)
+    if not raw or key is None:
+        return None
+    cached = json.loads(raw)
+    if cached.get("key") != key:
+        return None
+    if set(cached["packages"]) != {arch for _, arch in PLATFORMS}:
+        raise ValueError("Published APT plan is missing an architecture")
+    plans = {}
+    for _, arch in PLATFORMS:
+        packages = cached["packages"][arch]
+        if packages.get("nix-bin") != nix_version or {"nodejs", "nix-setup-systemd"} & packages.keys():
+            raise ValueError("Published APT plan violates the Nix/Node policy")
+        for name, value in packages.items():
+            validated(name, r"[a-z0-9+.-]+", "published APT package name")
+            validated(value, r"[a-zA-Z0-9.+:~_-]+", "published APT package version")
+        candidate = validated(cached["candidates"][arch], r"[a-zA-Z0-9.+:~_-]+", "published Nix candidate")
+        plans[arch] = (dict(sorted(packages.items())), candidate)
+    return plans
+
+
+def resolve(manifest=None):
     output_dir = ROOT / ".build"
     output_dir.mkdir(exist_ok=True)
     ca = fetch(CA_URL)
@@ -229,11 +308,18 @@ def resolve():
     snapshot = datetime.now(timezone.utc).strftime("%Y%m%dT%H0000Z")
     nix_version = validated((ROOT / "apt/nix-version").read_text().strip(),
                             r"[0-9][a-zA-Z0-9.+:~_-]+", "Nix package pin")
+    key = None
+    if APT_KEYRING.is_file() and shutil.which("gpgv"):
+        key = apt_plan_key(image, nix_version, ca, repository_indexes(snapshot))
+    plans = previous_apt_plans(manifest or {}, key, nix_version)
+    print("APT plans: " + ("reused from published image metadata" if plans is not None
+                          else "resolving both architectures in Docker"), file=sys.stderr)
     rust_names = {"amd64": "{tool}-x86_64-unknown-linux-gnu.tar.gz",
                   "arm64": "{tool}-aarch64-unknown-linux-gnu.tar.gz"}
     with ThreadPoolExecutor(max_workers=8) as pool:
-        apt_jobs = {arch: pool.submit(apt_plan, platform_images[arch], snapshot, nix_version, arch)
-                    for arch in ("amd64", "arm64")}
+        apt_jobs = {} if plans is not None else {
+            arch: pool.submit(apt_plan, platform_images[arch], snapshot, nix_version, arch)
+            for arch in ("amd64", "arm64")}
         jobs = {
             "node": pool.submit(node_tool), "pnpm": pool.submit(pnpm_tool),
             "c2j": pool.submit(github_tool, "colony-2/c2j", {
@@ -246,7 +332,8 @@ def resolve():
             jobs[tool] = pool.submit(github_tool, f"astral-sh/{tool}",
                                     {a: n.format(tool=tool) for a, n in rust_names.items()})
         tools = {name: job.result() for name, job in jobs.items()}
-        plans = {arch: job.result() for arch, job in apt_jobs.items()}
+        if plans is None:
+            plans = {arch: job.result() for arch, job in apt_jobs.items()}
     apt_dir = output_dir / "apt"
     apt_dir.mkdir(exist_ok=True)
     for arch, (packages, _) in plans.items():
@@ -259,6 +346,7 @@ def resolve():
                 "compatibility_group": "colony-nix-store-v1",
                 "candidate": {a: candidate for a, (_, candidate) in plans.items()}},
         "apt": {a: packages for a, (packages, _) in plans.items()},
+        "apt_plan_key": key,
         "tools": tools,
     }
 
@@ -268,6 +356,9 @@ def fingerprint(inputs):
     value = json.loads(json.dumps(inputs))
     value.pop("fingerprint", None)
     value.pop("resolution_snapshot", None)
+    # Repository changes to unrelated packages should trigger resolution, not
+    # an image rebuild if the selected package/tool versions remain identical.
+    value.pop("apt_plan_key", None)
     value.get("build_args", {}).pop("APT_SNAPSHOT", None)
     value.get("nix", {}).pop("candidate", None)
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -309,6 +400,11 @@ def write_tool_inputs(inputs, output_dir):
                 json.dumps({"tools": {tool: selected}}, sort_keys=True) + "\n")
 
 
+def apt_plan_annotation(inputs):
+    return json.dumps({"key": inputs.get("apt_plan_key"), "packages": inputs["apt"],
+                       "candidates": inputs["nix"]["candidate"]}, sort_keys=True, separators=(",", ":"))
+
+
 def needs_build(manifest, expected, revision):
     annotations = manifest.get("annotations", {})
     platforms = {
@@ -324,7 +420,7 @@ def needs_build(manifest, expected, revision):
 
 def published_manifest(image, tag="latest"):
     result = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", "--raw", f"{image}:{tag}"],
+        ["docker", "buildx", "imagetools", "inspect", "--format", "{{json .Manifest}}", f"{image}:{tag}"],
         text=True, capture_output=True, check=False,
     )
     if result.returncode:
@@ -347,24 +443,29 @@ def main():
     if options.check and (not options.image or not options.revision):
         parser.error("--check requires --image and --revision")
 
-    versions = resolve()
     manifest = published_manifest(options.image, options.tag) if options.image else {}
+    versions = resolve(manifest)
     select_apt_snapshot(versions, manifest)
     args = versions["build_args"]
     digest = fingerprint(versions)
     changed = not options.check or needs_build(manifest, digest, options.revision)
+    refresh = (not changed and versions.get("apt_plan_key") is not None
+               and manifest.get("annotations", {}).get(APT_PLAN_ANNOTATION) != apt_plan_annotation(versions))
     output_dir = Path(".build")
     output_dir.mkdir(exist_ok=True)
     write_tool_inputs(versions, output_dir)
     versions["fingerprint"] = digest
     (output_dir / "versions.json").write_text(json.dumps(versions, indent=2) + "\n")
+    (output_dir / "published.json").write_text(json.dumps(manifest, indent=2) + "\n")
     build_args = "\n".join(f"{key}={value}" for key, value in args.items())
     (output_dir / "build-args.env").write_text(build_args + "\n")
     print(json.dumps(versions, indent=2))
     print(f"Build required: {changed}")
+    print(f"Metadata refresh required: {refresh}")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"changed={str(changed).lower()}\nfingerprint={digest}\n")
+            output.write(f"refresh_metadata={str(refresh).lower()}\n")
             output.write(f"apt_inputs={apt_fingerprint(versions)}\napt_snapshot={args['APT_SNAPSHOT']}\n")
             output.write(f"build_args<<BUILD_ARGS\n{build_args}\nBUILD_ARGS\n")
 
