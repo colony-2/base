@@ -1,0 +1,82 @@
+# Deliberately no input_schema: the caller also supplies optional/null/value settings.
+id: base-local-verify
+inputs:
+  api_version: ${{ inputs.api_version }}
+  request: ${{ inputs.request }}
+  target_directory: ${{ inputs.target_directory }}
+  documents: ${{ inputs.documents }}
+  settings: ${{ inputs.?settings.orValue(null) }}
+  candidate: ${{ inputs.candidate }}
+  base: ${{ inputs.base }}
+sequence:
+- id: resolution
+  op: command_execution
+  const: true
+  execution_needs:
+    packages:
+    - nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3
+  inputs:
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
+    run: python3 -B "$ROOT/scripts/verify-local.py" resolution
+- id: publication_planning
+  op: command_execution
+  const: true
+  execution_needs:
+    packages:
+    - nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3
+  inputs:
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
+    run: python3 -B "$ROOT/scripts/verify-local.py" publication_planning
+- id: fast_resolution
+  op: command_execution
+  const: true
+  execution_needs:
+    packages:
+    - nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3
+  inputs:
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
+    run: python3 -B "$ROOT/scripts/verify-local.py" fast_resolution
+- id: aggregate
+  op: command_execution
+  const: true
+  execution_needs:
+    packages:
+    - nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3
+  artifacts:
+    resolution.json: ${{ sequence.resolution.artifacts['resolution.json'] }}
+    resolution.log: ${{ sequence.resolution.artifacts['resolution.log'] }}
+    publication_planning.json: ${{ sequence.publication_planning.artifacts['publication_planning.json'] }}
+    publication_planning.log: ${{ sequence.publication_planning.artifacts['publication_planning.log'] }}
+    fast_resolution.json: ${{ sequence.fast_resolution.artifacts['fast_resolution.json'] }}
+    fast_resolution.log: ${{ sequence.fast_resolution.artifacts['fast_resolution.log'] }}
+  inputs:
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      INBOX: ${{ context.environment.op.inbox }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+    run: python3 -B "$ROOT/scripts/verify-local.py" aggregate
+outputs:
+  api_version: c2.build-hook/v1
+  status: ${{ sequence.aggregate.outputs.stdout }}
+  summary: Three offline base suites completed; inspect verification.md and the per-behavior logs. Image resolution, builds and publication remain held.
+  artifact_refs:
+    resolution.json: ${{ sequence.resolution.artifacts['resolution.json'] }}
+    resolution.log: ${{ sequence.resolution.artifacts['resolution.log'] }}
+    publication_planning.json: ${{ sequence.publication_planning.artifacts['publication_planning.json'] }}
+    publication_planning.log: ${{ sequence.publication_planning.artifacts['publication_planning.log'] }}
+    fast_resolution.json: ${{ sequence.fast_resolution.artifacts['fast_resolution.json'] }}
+    fast_resolution.log: ${{ sequence.fast_resolution.artifacts['fast_resolution.log'] }}
+    verification.md: ${{ sequence.aggregate.artifacts['verification.md'] }}
+    environment.json: ${{ sequence.aggregate.artifacts['environment.json'] }}

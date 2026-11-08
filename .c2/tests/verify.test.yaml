@@ -1,0 +1,161 @@
+{
+  "recipe": "caller.yaml",
+  "cases": [
+    {
+      "id": "baseline",
+      "type": "integration_case",
+      "runtime": {
+        "cells": {
+          "root": {
+            "file_sources": {
+              ".c2/recipes/hooks/build/verify.yaml": "../recipes/hooks/build/verify.yaml",
+              "scripts/store-preflight.py": "../../scripts/store-preflight.py",
+              "scripts/install-tools.py": "../../scripts/install-tools.py",
+              "scripts/publish-image.py": "../../scripts/publish-image.py",
+              "scripts/verify-apt.py": "../../scripts/verify-apt.py",
+              "scripts/resolve-versions.py": "../../scripts/resolve-versions.py",
+              "scripts/verify-local.py": "../../scripts/verify-local.py",
+              "scripts/smoke-test.sh": "../../scripts/smoke-test.sh",
+              "scripts/plan-apt.sh": "../../scripts/plan-apt.sh",
+              "scripts/configure-apt.sh": "../../scripts/configure-apt.sh",
+              "scripts/build-image.sh": "../../scripts/build-image.sh",
+              "apt/nix-version": "../../apt/nix-version",
+              "apt/packages.txt": "../../apt/packages.txt",
+              "tests/test_fast_resolution.py": "../../tests/test_fast_resolution.py",
+              "tests/test_resolve_versions.py": "../../tests/test_resolve_versions.py",
+              "tests/test_publish_image.py": "../../tests/test_publish_image.py"
+            }
+          }
+        }
+      },
+      "inputs": {
+        "failure": false
+      },
+      "mocks": {
+        "ops": [
+          {
+            "repeat": true,
+            "match": {
+              "op": "command_execution"
+            },
+            "behavior": {
+              "mode": "passthrough"
+            }
+          }
+        ]
+      },
+      "assertions": [
+        {
+          "type": "output_equals",
+          "path": "settings_absent.status",
+          "value": "passed"
+        },
+        {
+          "type": "output_equals",
+          "path": "settings_null.status",
+          "value": "passed"
+        },
+        {
+          "type": "output_equals",
+          "path": "settings_value.status",
+          "value": "passed"
+        },
+        {
+          "type": "output_equals",
+          "path": "preservation.stdout",
+          "value": "preserved"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_absent.artifact_refs) == 8 && outputs.settings_absent.artifact_refs['resolution.log'].kind == 'stored'"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_null.artifact_refs) == 8 && outputs.settings_null.artifact_refs['resolution.log'].kind == 'stored'"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_value.artifact_refs) == 8 && outputs.settings_value.artifact_refs['resolution.log'].kind == 'stored'"
+        }
+      ]
+    },
+    {
+      "id": "forced-failure",
+      "type": "integration_case",
+      "runtime": {
+        "cells": {
+          "root": {
+            "file_sources": {
+              ".c2/recipes/hooks/build/verify.yaml": "../recipes/hooks/build/verify.yaml",
+              "scripts/store-preflight.py": "../../scripts/store-preflight.py",
+              "scripts/install-tools.py": "../../scripts/install-tools.py",
+              "scripts/publish-image.py": "../../scripts/publish-image.py",
+              "scripts/verify-apt.py": "../../scripts/verify-apt.py",
+              "scripts/resolve-versions.py": "../../scripts/resolve-versions.py",
+              "scripts/verify-local.py": "../../scripts/verify-local.py",
+              "scripts/smoke-test.sh": "../../scripts/smoke-test.sh",
+              "scripts/plan-apt.sh": "../../scripts/plan-apt.sh",
+              "scripts/configure-apt.sh": "../../scripts/configure-apt.sh",
+              "scripts/build-image.sh": "../../scripts/build-image.sh",
+              "apt/nix-version": "../../apt/nix-version",
+              "apt/packages.txt": "../../apt/packages.txt",
+              "tests/test_fast_resolution.py": "../../tests/test_fast_resolution.py",
+              "tests/test_resolve_versions.py": "../../tests/test_resolve_versions.py",
+              "tests/test_publish_image.py": "../../tests/test_publish_image.py"
+            }
+          }
+        }
+      },
+      "inputs": {
+        "failure": true
+      },
+      "mocks": {
+        "ops": [
+          {
+            "repeat": true,
+            "match": {
+              "op": "command_execution"
+            },
+            "behavior": {
+              "mode": "passthrough"
+            }
+          }
+        ]
+      },
+      "assertions": [
+        {
+          "type": "output_equals",
+          "path": "settings_absent.status",
+          "value": "failed"
+        },
+        {
+          "type": "output_equals",
+          "path": "settings_null.status",
+          "value": "failed"
+        },
+        {
+          "type": "output_equals",
+          "path": "settings_value.status",
+          "value": "failed"
+        },
+        {
+          "type": "output_equals",
+          "path": "preservation.stdout",
+          "value": "preserved"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_absent.artifact_refs) == 8 && outputs.settings_absent.artifact_refs['resolution.log'].kind == 'stored'"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_null.artifact_refs) == 8 && outputs.settings_null.artifact_refs['resolution.log'].kind == 'stored'"
+        },
+        {
+          "type": "cel_true",
+          "expr": "size(outputs.settings_value.artifact_refs) == 8 && outputs.settings_value.artifact_refs['resolution.log'].kind == 'stored'"
+        }
+      ]
+    }
+  ]
+}

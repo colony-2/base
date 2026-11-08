@@ -1,0 +1,234 @@
+{
+  "id": "base-hook-bounded-caller",
+  "input_schema": {
+    "failure": {
+      "type": "boolean",
+      "default_value": false
+    }
+  },
+  "inputs": {
+    "failure": "${{ inputs.failure }}"
+  },
+  "sequence": [
+    {
+      "id": "fixture_failure",
+      "op": "command_execution",
+      "execution_needs": {
+        "packages": [
+          "nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3"
+        ]
+      },
+      "inputs": {
+        "env": {
+          "FAIL": "${{ inputs.failure ? 'true' : 'false' }}"
+        },
+        "run": "python3 -B - <<'PYTEST'\nimport os\nfrom pathlib import Path\nif os.environ['FAIL'] == 'true':\n    with Path('tests/test_publish_image.py').open('a') as f:\n        f.write('\\nclass ForcedFailure(unittest.TestCase):\\n    def test_forced_failure(self):\\n        self.fail(\"representative hook failure\")\\n')\nPath('untracked-preservation-sentinel').write_text('preserve me')\nPYTEST"
+      }
+    },
+    {
+      "id": "settings_absent",
+      "include": {
+        "recipe": "cell://.c2/recipes/hooks/build/verify.yaml"
+      },
+      "inputs": {
+        "api_version": "c2.build-hook/v1",
+        "request": "$(touch SHOULD_NOT_EXIST) `touch SHOULD_NOT_EXIST`",
+        "target_directory": "$(touch SHOULD_NOT_EXIST)",
+        "candidate": "${{ context.git.hash }}",
+        "base": "${{ context.git.execution.base_hash }}",
+        "documents": {}
+      },
+      "expect_outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "status",
+          "summary",
+          "artifact_refs"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "enum": [
+              "c2.build-hook/v1"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "artifact_refs": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "settings_null",
+      "include": {
+        "recipe": "cell://.c2/recipes/hooks/build/verify.yaml"
+      },
+      "inputs": {
+        "api_version": "c2.build-hook/v1",
+        "request": "$(touch SHOULD_NOT_EXIST) `touch SHOULD_NOT_EXIST`",
+        "target_directory": "$(touch SHOULD_NOT_EXIST)",
+        "candidate": "${{ context.git.hash }}",
+        "base": "${{ context.git.execution.base_hash }}",
+        "documents": {},
+        "settings": null
+      },
+      "expect_outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "status",
+          "summary",
+          "artifact_refs"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "enum": [
+              "c2.build-hook/v1"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "artifact_refs": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "settings_value",
+      "include": {
+        "recipe": "cell://.c2/recipes/hooks/build/verify.yaml"
+      },
+      "inputs": {
+        "api_version": "c2.build-hook/v1",
+        "request": "$(touch SHOULD_NOT_EXIST) `touch SHOULD_NOT_EXIST`",
+        "target_directory": "$(touch SHOULD_NOT_EXIST)",
+        "candidate": "${{ context.git.hash }}",
+        "base": "${{ context.git.execution.base_hash }}",
+        "documents": {},
+        "settings": {
+          "kind": "value",
+          "format": "json",
+          "value": {
+            "variables": {
+              "literal": "$(touch SHOULD_NOT_EXIST)"
+            }
+          }
+        }
+      },
+      "expect_outputs": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "status",
+          "summary",
+          "artifact_refs"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "enum": [
+              "c2.build-hook/v1"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "artifact_refs": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "preservation",
+      "op": "command_execution",
+      "const": true,
+      "execution_needs": {
+        "packages": [
+          "nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3"
+        ]
+      },
+      "inputs": {
+        "run": "python3 -B - <<'PYTEST'\nfrom pathlib import Path\nassert Path('untracked-preservation-sentinel').read_text() == 'preserve me'\nassert not Path('SHOULD_NOT_EXIST').exists()\nprint('preserved')\nPYTEST"
+      }
+    }
+  ],
+  "outputs": {
+    "settings_absent": "${{ sequence.settings_absent.outputs }}",
+    "settings_null": "${{ sequence.settings_null.outputs }}",
+    "settings_value": "${{ sequence.settings_value.outputs }}",
+    "preservation": "${{ sequence.preservation.outputs }}",
+    "artifact_refs": {
+      "absent/resolution.log": "${{ sequence.settings_absent.outputs.artifact_refs['resolution.log'] }}",
+      "absent/resolution.json": "${{ sequence.settings_absent.outputs.artifact_refs['resolution.json'] }}",
+      "absent/publication_planning.log": "${{ sequence.settings_absent.outputs.artifact_refs['publication_planning.log'] }}",
+      "absent/publication_planning.json": "${{ sequence.settings_absent.outputs.artifact_refs['publication_planning.json'] }}",
+      "absent/fast_resolution.log": "${{ sequence.settings_absent.outputs.artifact_refs['fast_resolution.log'] }}",
+      "absent/fast_resolution.json": "${{ sequence.settings_absent.outputs.artifact_refs['fast_resolution.json'] }}",
+      "absent/verification.md": "${{ sequence.settings_absent.outputs.artifact_refs['verification.md'] }}",
+      "absent/environment.json": "${{ sequence.settings_absent.outputs.artifact_refs['environment.json'] }}",
+      "null/resolution.log": "${{ sequence.settings_null.outputs.artifact_refs['resolution.log'] }}",
+      "null/resolution.json": "${{ sequence.settings_null.outputs.artifact_refs['resolution.json'] }}",
+      "null/publication_planning.log": "${{ sequence.settings_null.outputs.artifact_refs['publication_planning.log'] }}",
+      "null/publication_planning.json": "${{ sequence.settings_null.outputs.artifact_refs['publication_planning.json'] }}",
+      "null/fast_resolution.log": "${{ sequence.settings_null.outputs.artifact_refs['fast_resolution.log'] }}",
+      "null/fast_resolution.json": "${{ sequence.settings_null.outputs.artifact_refs['fast_resolution.json'] }}",
+      "null/verification.md": "${{ sequence.settings_null.outputs.artifact_refs['verification.md'] }}",
+      "null/environment.json": "${{ sequence.settings_null.outputs.artifact_refs['environment.json'] }}",
+      "value/resolution.log": "${{ sequence.settings_value.outputs.artifact_refs['resolution.log'] }}",
+      "value/resolution.json": "${{ sequence.settings_value.outputs.artifact_refs['resolution.json'] }}",
+      "value/publication_planning.log": "${{ sequence.settings_value.outputs.artifact_refs['publication_planning.log'] }}",
+      "value/publication_planning.json": "${{ sequence.settings_value.outputs.artifact_refs['publication_planning.json'] }}",
+      "value/fast_resolution.log": "${{ sequence.settings_value.outputs.artifact_refs['fast_resolution.log'] }}",
+      "value/fast_resolution.json": "${{ sequence.settings_value.outputs.artifact_refs['fast_resolution.json'] }}",
+      "value/verification.md": "${{ sequence.settings_value.outputs.artifact_refs['verification.md'] }}",
+      "value/environment.json": "${{ sequence.settings_value.outputs.artifact_refs['environment.json'] }}"
+    }
+  }
+}
