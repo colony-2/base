@@ -43,6 +43,8 @@ RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.
 
 RUN --mount=type=bind,source=scripts/install-tools.py,target=/tmp/install-tools.py \
     --mount=type=bind,source=.build/tools/${TARGETARCH}/c2j.json,target=/tmp/tool.json \
+    --mount=type=cache,id=c2j-modules,target=/root/.cache/c2j-modules \
+    --mount=type=cache,id=c2j-build-${TARGETARCH},target=/root/.cache/c2j-build \
     python3 /tmp/install-tools.py /tmp/tool.json "${TARGETARCH}"
 
 COPY nix/runtime.conf /etc/nix/nix.conf

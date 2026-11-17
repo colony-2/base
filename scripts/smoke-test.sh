@@ -31,6 +31,11 @@ with open('/usr/local/share/base/versions.json') as source:
 for name, tool in manifest['tools'].items():
     args = ['version'] if name == 'c2j' else ['--version']
     output = subprocess.check_output([name, *args], text=True)
+    if name == 'c2j':
+        # Go source builds report a pseudo-version ending in the Git revision.
+        match = re.fullmatch(r'c2j version v\d+\.\d+\.\d+-\d{14}-([0-9a-f]{12})\s*', output)
+        assert match and match[1] == tool['source']['commit'][:12], (name, output, tool['source'])
+        continue
     match = re.search(r'\bv?(\d+\.\d+\.\d+)\b', output)
     assert match, (name, output)
     actual = match[1]

@@ -67,15 +67,15 @@ def check_case(options, arch, changed_tool):
         inputs["build_args"]["APT_SNAPSHOT"] = (observed + timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")
         versions.select_apt_snapshot(inputs, published)
         if changed_tool:
-            # Same verified bytes, different artifact input: must execute this
-            # tool's installer again, while retaining the preceding layers.
-            inputs["tools"]["c2j"]["artifacts"][arch]["url"] += "#cache-regression"
+            # Same verified toolchain, different build input: must compile c2j
+            # again, while retaining the preceding layers.
+            inputs["tools"]["c2j"]["toolchain"]["artifacts"][arch]["url"] += "#cache-regression"
         else:
             # An unrelated architecture's input must not invalidate this one.
             other = "amd64" if arch == "arm64" else "arm64"
             with (build / f"apt/{other}.txt").open("a") as output:
                 output.write("other-architecture-test=1\n")
-            inputs["tools"]["c2j"]["artifacts"][other]["url"] += "#other-architecture"
+            inputs["tools"]["c2j"]["toolchain"]["artifacts"][other]["url"] += "#other-architecture"
             inputs["nix"]["candidate"][other] = "999.0.0"
         inputs["fingerprint"] = versions.fingerprint(inputs)
         versions.write_tool_inputs(inputs, build)

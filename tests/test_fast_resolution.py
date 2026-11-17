@@ -100,12 +100,14 @@ class FastResolutionTests(unittest.TestCase):
                         patch.object(versions, "apt_plan", return_value=({"nix-bin": PIN}, PIN)) as apt, \
                         patch.object(versions, "node_tool", return_value={}) as node, \
                         patch.object(versions, "pnpm_tool", return_value={}) as pnpm, \
+                        patch.object(versions, "c2j_tool", return_value={}) as c2j, \
                         patch.object(versions, "github_tool", return_value={}) as github:
                     result = versions.resolve(cached_plan(published_key))
                 self.assertEqual(apt.call_count, 0 if published_key == "key" else 2)
                 node.assert_called_once()
                 pnpm.assert_called_once()
-                self.assertEqual(github.call_count, 4)
+                c2j.assert_called_once()
+                self.assertEqual(github.call_count, 3)
                 self.assertEqual(result["apt"]["arm64"], {"nix-bin": PIN})
                 self.assertEqual((root / ".build/apt/arm64.txt").read_text(), f"nix-bin={PIN}\n")
 

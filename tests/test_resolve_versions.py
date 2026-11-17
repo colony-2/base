@@ -71,6 +71,68 @@ class ChangeDetectionTests(unittest.TestCase):
 
 
 class ResolutionTests(unittest.TestCase):
+    def go_release(self, version="go1.26.9"):
+        return {"version": version, "stable": True, "files": [
+            {"filename": f"{version}.linux-{arch}.tar.gz", "sha256": char * 64}
+            for arch, char in (("amd64", "a"), ("arm64", "b"))]}
+
+    @patch.object(versions, "fetch_json")
+    def test_c2j_resolves_main_commit_and_checksummed_go_126(self, fetch_json):
+        fetch_json.side_effect = [{"sha": "c" * 40}, [self.go_release("go1.27.1"),
+                                 self.go_release("go1.26.9"), self.go_release("go1.26.10")]]
+        result = versions.c2j_tool()
+        self.assertEqual(fetch_json.call_args_list[0].args,
+                         ("https://api.github.com/repos/colony-2/c2j/commits/main",))
+        self.assertEqual(result["source"], {"repository": "https://github.com/colony-2/c2j.git",
+                                            "commit": "c" * 40})
+        self.assertEqual(result["toolchain"]["version"], "go1.26.10")
+        self.assertEqual(result["toolchain"]["artifacts"]["arm64"], {
+            "url": "https://go.dev/dl/go1.26.10.linux-arm64.tar.gz", "sha256": "b" * 64})
+
+    @patch.object(versions, "fetch_json")
+    def test_c2j_rejects_invalid_commit_or_toolchain(self, fetch_json):
+        for commit in ("main", "", "c" * 40 + "\n"):
+            fetch_json.side_effect = [{"sha": commit}]
+            with self.subTest(commit=commit), self.assertRaises(ValueError):
+                versions.c2j_tool()
+        for defect in ("missing", "duplicate", "checksum", "unstable"):
+            release = self.go_release()
+            if defect == "missing":
+                release["files"].pop()
+            elif defect == "duplicate":
+                release["files"].append(release["files"][0])
+            elif defect == "checksum":
+                release["files"][0]["sha256"] = "invalid"
+            else:
+                release["stable"] = False
+            fetch_json.side_effect = [{"sha": "c" * 40}, [release]]
+            with self.subTest(defect=defect), self.assertRaises(ValueError):
+                versions.c2j_tool()
+
+    @patch.object(versions, "fetch_json")
+    def test_c2j_input_tracks_source_and_only_target_toolchain(self, fetch_json):
+        fetch_json.side_effect = [{"sha": "c" * 40}, [self.go_release()]]
+        inputs = {"tools": {"c2j": versions.c2j_tool()}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            versions.write_tool_inputs(inputs, root)
+            path = root / "tools/arm64/c2j.json"
+            initial = path.read_bytes()
+            data = inputs["tools"]["c2j"]
+            data["version"] = "reporting only"
+            data["toolchain"]["artifacts"]["amd64"]["sha256"] = "d" * 64
+            versions.write_tool_inputs(inputs, root)
+            self.assertEqual(path.read_bytes(), initial)
+            digest = versions.fingerprint(inputs)
+            data["source"]["commit"] = "e" * 40
+            versions.write_tool_inputs(inputs, root)
+            self.assertNotEqual(path.read_bytes(), initial)
+            self.assertNotEqual(versions.fingerprint(inputs), digest)
+            source_changed = path.read_bytes()
+            data["toolchain"]["artifacts"]["arm64"]["sha256"] = "f" * 64
+            versions.write_tool_inputs(inputs, root)
+            self.assertNotEqual(path.read_bytes(), source_changed)
+
     @patch.object(versions, "resolve", return_value={"build_args": {"UBUNTU_IMAGE": "ubuntu@sha256:" + "a" * 64, "APT_SNAPSHOT": "20261015T020000Z"}, "apt": {"arm64": {"bash": "1"}}, "tools": {}})
     @patch.object(versions, "published_manifest")
     def test_push_forces_build_and_schedule_skips_identical_inputs(self, inspect, resolve):
@@ -162,11 +224,11 @@ class ResolutionTests(unittest.TestCase):
         data = {"version": "1.2.3", "artifacts": {
             arch: {"url": f"https://example.com/{arch}", "sha256": arch}
             for arch in ("amd64", "arm64")}}
-        inputs["tools"] = {"c2j": data, "pnpm": {**data, "native_artifacts": data["artifacts"]}}
+        inputs["tools"] = {"yq": data, "pnpm": {**data, "native_artifacts": data["artifacts"]}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             versions.write_tool_inputs(inputs, root)
-            path = root / "tools/arm64/c2j.json"
+            path = root / "tools/arm64/yq.json"
             initial = path.read_bytes()
             pnpm = json.loads((root / "tools/arm64/pnpm.json").read_text())["tools"]["pnpm"]
             self.assertEqual(set(pnpm["native_artifacts"]), {"arm64"})
@@ -249,6 +311,7 @@ class ResolutionTests(unittest.TestCase):
                     patch.object(versions, "apt_plan", return_value=({"nix-bin": "2.34.3+dfsg-1"}, "2.34.3+dfsg-1")) as plan, \
                     patch.object(versions, "node_tool", return_value={}), \
                     patch.object(versions, "pnpm_tool", return_value={}), \
+                    patch.object(versions, "c2j_tool", return_value={}), \
                     patch.object(versions, "github_tool", return_value={}):
                 result = versions.resolve()
             self.assertEqual(result["build_args"]["UBUNTU_IMAGE"], "ubuntu@index")

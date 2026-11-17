@@ -123,6 +123,27 @@ def github_tool(repo, names):
     return {"version": tool_version, "artifacts": artifacts}
 
 
+def c2j_tool():
+    repo = "colony-2/c2j"
+    commit = validated(fetch_json(f"https://api.github.com/repos/{repo}/commits/main")["sha"],
+                       r"[0-9a-f]{40}", "c2j main commit")
+    releases = fetch_json("https://go.dev/dl/?mode=json&include=all")
+    selected = max((r for r in releases if r["stable"]
+                    and re.fullmatch(r"go1\.26\.\d+", r["version"])),
+                   key=lambda r: tuple(map(int, r["version"][2:].split("."))))
+    artifacts = {}
+    for arch in ("amd64", "arm64"):
+        name = f'{selected["version"]}.linux-{arch}.tar.gz'
+        files = [f for f in selected["files"] if f["filename"] == name]
+        if len(files) != 1:
+            raise ValueError(f"Go release is missing a unique {name}")
+        artifacts[arch] = {"url": f"https://go.dev/dl/{name}",
+                           "sha256": validated(files[0]["sha256"], r"[0-9a-f]{64}", "Go checksum")}
+    return {"version": commit,
+            "source": {"repository": f"https://github.com/{repo}.git", "commit": commit},
+            "toolchain": {"version": selected["version"], "artifacts": artifacts}}
+
+
 def node_tool():
     releases = fetch_json("https://nodejs.org/dist/index.json")
     choices = [r for r in releases if re.fullmatch(r"v24\.\d+\.\d+", r["version"])
@@ -322,9 +343,7 @@ def resolve(manifest=None):
             for arch in ("amd64", "arm64")}
         jobs = {
             "node": pool.submit(node_tool), "pnpm": pool.submit(pnpm_tool),
-            "c2j": pool.submit(github_tool, "colony-2/c2j", {
-                "amd64": "c2j_{version}_Linux_x86_64.tar.gz",
-                "arm64": "c2j_{version}_Linux_arm64.tar.gz"}),
+            "c2j": pool.submit(c2j_tool),
             "yq": pool.submit(github_tool, "mikefarah/yq", {
                 arch: f"yq_linux_{arch}" for arch in ("amd64", "arm64")}),
         }
@@ -393,7 +412,11 @@ def write_tool_inputs(inputs, output_dir):
         directory = output_dir / "tools" / arch
         directory.mkdir(parents=True, exist_ok=True)
         for tool, data in inputs["tools"].items():
-            selected = {"artifacts": {arch: data["artifacts"][arch]}}
+            if tool == "c2j":
+                selected = {"source": data["source"], "toolchain": {
+                    "artifacts": {arch: data["toolchain"]["artifacts"][arch]}}}
+            else:
+                selected = {"artifacts": {arch: data["artifacts"][arch]}}
             if "native_artifacts" in data:
                 selected["native_artifacts"] = {arch: data["native_artifacts"][arch]}
             (directory / f"{tool}.json").write_text(

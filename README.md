@@ -34,7 +34,10 @@ See [the Pulse integration contract](docs/shared-nix-store.md).
 
 [APT packages](apt/packages.txt) supply most tools. Node 24 uses official release
 archives; pnpm uses the npm package and its matching native executable when
-applicable; uv, Ruff, yq and c2j use official release artifacts. All external
+applicable; uv, Ruff and yq use official release artifacts. c2j is compiled from
+the current `colony-2/c2j` main commit, pinned during resolution for both
+architectures, with Git revision metadata and a checksummed Go 1.26 toolchain.
+The source checkout and Go toolchain are removed after compilation. All external
 artifacts are resolved and checksummed before installation. No first-use
 bootstrap is needed. `fd` and `bat` expose Ubuntu's `fdfind` and `batcat` names.
 
@@ -94,9 +97,10 @@ Unchanged checks first verify Ubuntu's signed Release files and compare the
 package-index checksums with the APT plan recorded on the published image index.
 Matching indexes, base, Nix pin, and resolver configuration reuse that plan
 without Docker containers or full package-index downloads. Upstream tool
-releases are still checked. If an unrelated repository update requires solving
-again but selects the same versions, only comparison metadata on `latest` is
-refreshed; image layers and immutable build tags stay the same.
+releases and c2j's main commit are still checked. If an unrelated repository
+update requires solving again but selects the same versions, only comparison
+metadata on `latest` is refreshed; image layers and immutable build tags stay
+the same.
 
 Nix stays on its certified pin across tool updates. The available Nix candidate
 is recorded, but a newer Nix package requires a reviewed pin change and store

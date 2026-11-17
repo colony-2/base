@@ -20,10 +20,10 @@ checksums of the uncompressed package indexes for all four components and both
 architectures, ignoring timestamp/signature/translation-only changes. The plan
 key also includes the Ubuntu base, Nix pin, bootstrap CA, package list, and
 planning scripts. A matching `io.colony-2.base.apt-plan` annotation supplies the
-previously resolved package sets and Nix candidates. Tool-release checks always
-run. Missing/nonmatching metadata triggers full resolution; bad signatures or
-invalid matching plans fail closed. Hosts without gpgv/the Ubuntu keyring use
-the original Docker resolution path.
+previously resolved package sets and Nix candidates. Tool-release and c2j
+main-commit checks always run. Missing/nonmatching metadata triggers full
+resolution; bad signatures or invalid matching plans fail closed. Hosts without
+gpgv/the Ubuntu keyring use the original Docker resolution path.
 
 If indexes changed but the selected packages/tools did not, CI refreshes only
 the comparison annotations on `latest`, referencing the previously inspected
@@ -45,6 +45,12 @@ URL and checksum (and native dependency for pnpm). Tools install directly into
 final-image layers, so their installation results are available through inline
 metadata. Temporary downloads are removed in the same step. The full reporting
 manifest is copied near the end, after the expensive steps.
+
+c2j's input contains the exact main commit and the target architecture's
+checksummed Go 1.26 toolchain. Its final-image step checks out that commit and
+compiles with Git revision metadata. Only the binary survives the step; Go
+module and compilation caches use BuildKit cache mounts. A new main commit
+changes the input fingerprint and triggers the scheduled image build.
 
 This is ordinary dependent-layer reuse: changing APT invalidates the following
 tool layers, and changing one tool invalidates later layers. Node and pnpm come
@@ -79,12 +85,13 @@ metadata, push behavior, and isolation of tool inputs.
 The opt-in `tests/check_image_reuse.py` integration test requires the current
 checkout's resolved inputs and an image built from exactly those inputs with
 `--cache-to type=inline`. It creates a fresh, disposable BuildKit builder for
-each of four cases: reporting/other-architecture changes and a c2j artifact-input
+each of four cases: reporting/other-architecture changes and a c2j toolchain-input
 change, for both amd64 and arm64. It asserts that every expected installation
 vertex reports `cached: true` in BuildKit's structured progress, and that c2j
-executes again when its artifact input changes. Text progress alone can label
+executes again when its build input changes. Text progress alone can label
 materialization of a reused layer as `DONE` while downloading/extracting it.
-The c2j fixture changes the URL fragment while retaining the verified bytes.
+The c2j fixture changes the toolchain URL fragment while retaining the verified
+bytes.
 
 For an already published matching image:
 

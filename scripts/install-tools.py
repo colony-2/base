@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Install only checksum-verified, resolved upstream artifacts into the runtime filesystem."""
+"""Install resolved artifacts and build c2j from its pinned source commit."""
 import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -29,12 +31,40 @@ def download(artifact, destination):
         raise ValueError(f'Checksum mismatch: {artifact["url"]}')
 
 
+def build_c2j(data, arch, destination, temp):
+    commit = data['source']['commit']
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Invalid c2j commit')
+    archive = temp / 'go.tar.gz'
+    download(data['toolchain']['artifacts'][arch], archive)
+    with tarfile.open(archive) as tar:
+        tar.extractall(temp, filter='data')
+    source = temp / 'source'
+    source.mkdir()
+    for args in (['init', '.'], ['remote', 'add', 'origin', data['source']['repository']],
+                 ['fetch', '--depth=1', 'origin', commit], ['checkout', '--detach', commit]):
+        subprocess.run(['git', *args], cwd=source, check=True)
+    actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+    if actual != commit:
+        raise ValueError('c2j checkout does not match the resolved commit')
+    env = {**os.environ, 'PATH': f'{temp}/go/bin:' + os.environ['PATH'],
+           'GOROOT': str(temp / 'go'), 'GOTOOLCHAIN': 'local',
+           'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': arch,
+           'GOMODCACHE': '/root/.cache/c2j-modules', 'GOCACHE': '/root/.cache/c2j-build'}
+    subprocess.run(['go', 'build', '-mod=readonly', '-trimpath', '-buildvcs=true',
+                    '-o', str(destination), './cmd/c2j'], cwd=source, env=env, check=True)
+    destination.chmod(0o755)
+
+
 def install(manifest, arch, root):
     bin_dir = root / 'usr/local/bin'
     bin_dir.mkdir(parents=True, exist_ok=True)
     for tool, data in manifest['tools'].items():
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
+            if tool == 'c2j':
+                build_c2j(data, arch, bin_dir / tool, temp)
+                continue
             archive = temp / 'download'
             download(data['artifacts'][arch], archive)
             if tool == 'yq':
