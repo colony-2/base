@@ -214,7 +214,7 @@ def parse_apt_plan(output):
 
 
 def apt_plan(image, snapshot, nix_version, arch):
-    name = "base-apt-resolve-" + uuid.uuid4().hex
+    name = os.environ.get("BASE_VERIFY_PREFIX", "") + "base-apt-resolve-" + uuid.uuid4().hex
     try:
         result = subprocess.run([
             "docker", "run", "--rm", "--name", name, "--platform", f"linux/{arch}",
@@ -320,7 +320,10 @@ def previous_apt_plans(manifest, key, nix_version):
     return plans
 
 
-def resolve(manifest=None):
+def resolve(manifest=None, *, verify_arch=None):
+    if verify_arch is not None and (("linux", verify_arch) not in PLATFORMS or manifest):
+        raise ValueError("Native verify requires one supported architecture and no published manifest")
+    arches = (verify_arch,) if verify_arch else ("amd64", "arm64")
     output_dir = ROOT / ".build"
     output_dir.mkdir(exist_ok=True)
     ca = fetch(CA_URL)
@@ -330,17 +333,17 @@ def resolve(manifest=None):
     nix_version = validated((ROOT / "apt/nix-version").read_text().strip(),
                             r"[0-9][a-zA-Z0-9.+:~_-]+", "Nix package pin")
     key = None
-    if APT_KEYRING.is_file() and shutil.which("gpgv"):
+    if verify_arch is None and APT_KEYRING.is_file() and shutil.which("gpgv"):
         key = apt_plan_key(image, nix_version, ca, repository_indexes(snapshot))
     plans = previous_apt_plans(manifest or {}, key, nix_version)
     print("APT plans: " + ("reused from published image metadata" if plans is not None
-                          else "resolving both architectures in Docker"), file=sys.stderr)
+                          else "resolving in Docker for " + ", ".join(arches)), file=sys.stderr)
     rust_names = {"amd64": "{tool}-x86_64-unknown-linux-gnu.tar.gz",
                   "arm64": "{tool}-aarch64-unknown-linux-gnu.tar.gz"}
     with ThreadPoolExecutor(max_workers=8) as pool:
         apt_jobs = {} if plans is not None else {
             arch: pool.submit(apt_plan, platform_images[arch], snapshot, nix_version, arch)
-            for arch in ("amd64", "arm64")}
+            for arch in arches}
         jobs = {
             "node": pool.submit(node_tool), "pnpm": pool.submit(pnpm_tool),
             "c2j": pool.submit(c2j_tool),
@@ -405,10 +408,10 @@ def select_apt_snapshot(inputs, manifest):
     inputs["build_args"]["APT_SNAPSHOT"] = previous
 
 
-def write_tool_inputs(inputs, output_dir):
+def write_tool_inputs(inputs, output_dir, arches=("amd64", "arm64")):
     # Each RUN sees only one tool for its target architecture, not the full
     # reporting manifest (which includes timestamps and unrelated releases).
-    for arch in ("amd64", "arm64"):
+    for arch in arches:
         directory = output_dir / "tools" / arch
         directory.mkdir(parents=True, exist_ok=True)
         for tool, data in inputs["tools"].items():
@@ -462,12 +465,16 @@ def main():
     parser.add_argument("--tag", default="latest")
     parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", ""))
     parser.add_argument("--check", action="store_true", help="Skip unchanged published inputs")
+    parser.add_argument("--verify-arch", choices=("amd64", "arm64"),
+                        help="Resolve the native architecture for an unpublished verification build")
     options = parser.parse_args()
+    if options.verify_arch and (options.image or options.check or options.tag != "latest"):
+        parser.error("--verify-arch cannot use published image inputs or --check")
     if options.check and (not options.image or not options.revision):
         parser.error("--check requires --image and --revision")
 
     manifest = published_manifest(options.image, options.tag) if options.image else {}
-    versions = resolve(manifest)
+    versions = resolve(verify_arch=options.verify_arch) if options.verify_arch else resolve(manifest)
     select_apt_snapshot(versions, manifest)
     args = versions["build_args"]
     digest = fingerprint(versions)
@@ -476,7 +483,10 @@ def main():
                and manifest.get("annotations", {}).get(APT_PLAN_ANNOTATION) != apt_plan_annotation(versions))
     output_dir = Path(".build")
     output_dir.mkdir(exist_ok=True)
-    write_tool_inputs(versions, output_dir)
+    if options.verify_arch:
+        write_tool_inputs(versions, output_dir, (options.verify_arch,))
+    else:
+        write_tool_inputs(versions, output_dir)
     versions["fingerprint"] = digest
     (output_dir / "versions.json").write_text(json.dumps(versions, indent=2) + "\n")
     (output_dir / "published.json").write_text(json.dumps(manifest, indent=2) + "\n")

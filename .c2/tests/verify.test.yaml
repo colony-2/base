@@ -5,6 +5,7 @@
       "id": "baseline",
       "type": "integration_case",
       "runtime": {
+        "allocation": {"base": "ubuntu-24.04-arm64", "capabilities": ["docker"], "schema_version": 2},
         "cells": {
           "root": {
             "file_sources": {
@@ -15,6 +16,7 @@
               "scripts/verify-apt.py": "../../scripts/verify-apt.py",
               "scripts/resolve-versions.py": "../../scripts/resolve-versions.py",
               "scripts/verify-local.py": "../../scripts/verify-local.py",
+              "scripts/verify-image.py": "image-fixture.py",
               "scripts/smoke-test.sh": "../../scripts/smoke-test.sh",
               "scripts/plan-apt.sh": "../../scripts/plan-apt.sh",
               "scripts/configure-apt.sh": "../../scripts/configure-apt.sh",
@@ -23,7 +25,8 @@
               "apt/packages.txt": "../../apt/packages.txt",
               "tests/test_fast_resolution.py": "../../tests/test_fast_resolution.py",
               "tests/test_resolve_versions.py": "../../tests/test_resolve_versions.py",
-              "tests/test_publish_image.py": "../../tests/test_publish_image.py"
+              "tests/test_publish_image.py": "../../tests/test_publish_image.py",
+              "tests/test_smoke_versions.py": "../../tests/test_smoke_versions.py"
             }
           }
         }
@@ -67,15 +70,15 @@
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_absent.artifact_refs) == 8 && outputs.settings_absent.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_absent.artifact_refs) == 16 && outputs.settings_absent.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_absent.artifact_refs['smoke_versions.json'].kind == 'stored' && outputs.settings_absent.artifact_refs['image.json'].kind == 'stored'"
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_null.artifact_refs) == 8 && outputs.settings_null.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_null.artifact_refs) == 16 && outputs.settings_null.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_null.artifact_refs['smoke_versions.json'].kind == 'stored'"
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_value.artifact_refs) == 8 && outputs.settings_value.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_value.artifact_refs) == 16 && outputs.settings_value.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_value.artifact_refs['smoke_versions.json'].kind == 'stored'"
         }
       ]
     },
@@ -83,6 +86,7 @@
       "id": "forced-failure",
       "type": "integration_case",
       "runtime": {
+        "allocation": {"base": "ubuntu-24.04-arm64", "capabilities": ["docker"], "schema_version": 2},
         "cells": {
           "root": {
             "file_sources": {
@@ -93,6 +97,7 @@
               "scripts/verify-apt.py": "../../scripts/verify-apt.py",
               "scripts/resolve-versions.py": "../../scripts/resolve-versions.py",
               "scripts/verify-local.py": "../../scripts/verify-local.py",
+              "scripts/verify-image.py": "image-fixture.py",
               "scripts/smoke-test.sh": "../../scripts/smoke-test.sh",
               "scripts/plan-apt.sh": "../../scripts/plan-apt.sh",
               "scripts/configure-apt.sh": "../../scripts/configure-apt.sh",
@@ -101,7 +106,8 @@
               "apt/packages.txt": "../../apt/packages.txt",
               "tests/test_fast_resolution.py": "../../tests/test_fast_resolution.py",
               "tests/test_resolve_versions.py": "../../tests/test_resolve_versions.py",
-              "tests/test_publish_image.py": "../../tests/test_publish_image.py"
+              "tests/test_publish_image.py": "../../tests/test_publish_image.py",
+              "tests/test_smoke_versions.py": "../../tests/test_smoke_versions.py"
             }
           }
         }
@@ -145,15 +151,15 @@
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_absent.artifact_refs) == 8 && outputs.settings_absent.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_absent.artifact_refs) == 16 && outputs.settings_absent.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_absent.artifact_refs['smoke_versions.json'].kind == 'stored' && outputs.settings_absent.artifact_refs['image.json'].kind == 'stored'"
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_null.artifact_refs) == 8 && outputs.settings_null.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_null.artifact_refs) == 16 && outputs.settings_null.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_null.artifact_refs['smoke_versions.json'].kind == 'stored'"
         },
         {
           "type": "cel_true",
-          "expr": "size(outputs.settings_value.artifact_refs) == 8 && outputs.settings_value.artifact_refs['resolution.log'].kind == 'stored'"
+          "expr": "size(outputs.settings_value.artifact_refs) == 16 && outputs.settings_value.artifact_refs['smoke_versions.log'].kind == 'stored' && outputs.settings_value.artifact_refs['smoke_versions.json'].kind == 'stored'"
         }
       ]
     }

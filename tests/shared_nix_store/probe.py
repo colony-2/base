@@ -6,6 +6,7 @@ Failures represent unmet contract requirements, not expected-success assertions.
 import argparse
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -21,6 +22,8 @@ NIXPKGS = '39ad350a0602fa0a58a544344e3e9187526ea45c'
 
 
 def docker(*args, check=True, timeout=90, input=None):
+    if os.environ.get('BASE_VERIFY_PREFIX') and args[0] == 'run' and '--name' not in args:
+        args = ('run', '--name', name(), *args[1:])
     result = subprocess.run(['docker', *args], text=True, input=input,
                             capture_output=True, timeout=timeout, check=False)
     if check and result.returncode:
@@ -29,7 +32,7 @@ def docker(*args, check=True, timeout=90, input=None):
 
 
 def name():
-    return 'shared-nix-probe-' + uuid.uuid4().hex
+    return os.environ.get('BASE_VERIFY_PREFIX', '') + 'shared-nix-probe-' + uuid.uuid4().hex
 
 
 def new_volume():
@@ -94,10 +97,11 @@ print(json.dumps(paths))
                 '-e', 'NIX_CONFIG=extra-substituters =\nsubstituters = ' +
                 ('file:///fixture/binary?trusted=false' if source is True else (source or ''))]
 
-    def create(self, argv, **kwargs):
+    def create(self, argv, *, network_alias=None, **kwargs):
         container = name()
         self.containers.append(container)
-        docker('create', '--name', container, *self.options(**kwargs), IMAGE, *argv)
+        alias = ['--network-alias', network_alias] if network_alias is not None else []
+        docker('create', '--name', container, *self.options(**kwargs), *alias, IMAGE, *argv)
         return container
 
     def run_in(self, script, *, check=True, **kwargs):
@@ -222,13 +226,21 @@ while not ({expression}):
                 network = name()
                 self.networks.append(network)
                 docker('network', 'create', '--internal', network)
-                server = self.create(['python3', '/probe/server.py'], network=network)
-                docker('start', server)
-                source = f'http://{server}:8000?trusted=false'
+                cache_alias = 'probe-cache'
+                server = self.create(['python3', '/probe/server.py'], network=network, network_alias=cache_alias)
+                source = f'http://{cache_alias}:8000?trusted=false'
                 first = self.create(['python3', '/probe/worker.py', 'first', 'nix-store', '-r', path], source=source, network=network)
-                docker('start', first)
-                self.touch('/coord/go')
-                self.wait_for('Path("/coord/paused").exists()', timeout=25)
+                try:
+                    docker('start', server)
+                    self.wait_for('Path("/coord/server-ready").exists()')
+                    docker('start', first)
+                    self.touch('/coord/go')
+                    self.wait_for('Path("/coord/paused").exists()', timeout=25)
+                except AssertionError:
+                    for container in (server, first):
+                        logs = docker('logs', container, check=False, timeout=10)
+                        print(f'container {container} logs:\n{logs.stdout}{logs.stderr}', file=sys.stderr, flush=True)
+                    raise
                 second = self.create(['python3', '/probe/worker.py', 'second', 'nix-store', '-r', path], source=source, network=network)
                 docker('start', second)
                 self.wait_for('Path("/coord/ready-second").exists()')

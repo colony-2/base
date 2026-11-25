@@ -11,7 +11,7 @@
   },
   "sequence": [
     {
-      "id": "fixture_failure",
+      "id": "fixture_setup",
       "op": "command_execution",
       "execution_needs": {
         "packages": [
@@ -22,7 +22,7 @@
         "env": {
           "FAIL": "${{ inputs.failure ? 'true' : 'false' }}"
         },
-        "run": "python3 -B - <<'PYTEST'\nimport os\nfrom pathlib import Path\nif os.environ['FAIL'] == 'true':\n    with Path('tests/test_publish_image.py').open('a') as f:\n        f.write('\\nclass ForcedFailure(unittest.TestCase):\\n    def test_forced_failure(self):\\n        self.fail(\"representative hook failure\")\\n')\nPath('untracked-preservation-sentinel').write_text('preserve me')\nPYTEST"
+        "run": "python3 -B - <<'PYTEST'\nimport os\nfrom pathlib import Path\nwith Path('tests/test_smoke_versions.py').open('a') as fixture:\n    fixture.write('\\nprint(\"smoke fixture loaded\")\\n')\n    if os.environ['FAIL'] == 'true':\n        fixture.write('\\nclass ForcedFailure(unittest.TestCase):\\n    def test_forced_smoke_failure(self):\\n        self.fail(\"injected smoke-version failure\")\\n')\nPath('untracked-preservation-sentinel').write_text('preserve me')\nPYTEST"
       }
     },
     {
@@ -194,8 +194,15 @@
           "nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3"
         ]
       },
+      "artifacts": {
+        "smoke_versions.log": "${{ sequence.settings_absent.outputs.artifact_refs['smoke_versions.log'] }}"
+      },
       "inputs": {
-        "run": "python3 -B - <<'PYTEST'\nfrom pathlib import Path\nassert Path('untracked-preservation-sentinel').read_text() == 'preserve me'\nassert not Path('SHOULD_NOT_EXIST').exists()\nprint('preserved')\nPYTEST"
+        "env": {
+          "INBOX": "${{ context.environment.op.inbox }}",
+          "FAIL": "${{ inputs.failure ? 'true' : 'false' }}"
+        },
+        "run": "python3 -B - <<'PYTEST'\nimport os\nfrom pathlib import Path\nassert Path('untracked-preservation-sentinel').read_text() == 'preserve me'\nassert not Path('SHOULD_NOT_EXIST').exists()\nlog = (Path(os.environ['INBOX']) / 'smoke_versions.log').read_text()\nassert 'smoke fixture loaded' in log, log\nfor name in ('test_source_version_matches_resolved_commit', 'test_wrong_commit_release_or_dirty_checkout_fails'):\n    assert any(line.startswith(name + ' ') and line.endswith(' ... ok') for line in log.splitlines()), log\nif os.environ['FAIL'] == 'true':\n    assert any(line.startswith('test_forced_smoke_failure ') and line.endswith(' ... FAIL') for line in log.splitlines()), log\n    assert 'AssertionError: injected smoke-version failure' in log, log\nprint('preserved')\nPYTEST"
       }
     }
   ],
@@ -211,6 +218,8 @@
       "absent/publication_planning.json": "${{ sequence.settings_absent.outputs.artifact_refs['publication_planning.json'] }}",
       "absent/fast_resolution.log": "${{ sequence.settings_absent.outputs.artifact_refs['fast_resolution.log'] }}",
       "absent/fast_resolution.json": "${{ sequence.settings_absent.outputs.artifact_refs['fast_resolution.json'] }}",
+      "absent/smoke_versions.log": "${{ sequence.settings_absent.outputs.artifact_refs['smoke_versions.log'] }}",
+      "absent/smoke_versions.json": "${{ sequence.settings_absent.outputs.artifact_refs['smoke_versions.json'] }}",
       "absent/verification.md": "${{ sequence.settings_absent.outputs.artifact_refs['verification.md'] }}",
       "absent/environment.json": "${{ sequence.settings_absent.outputs.artifact_refs['environment.json'] }}",
       "null/resolution.log": "${{ sequence.settings_null.outputs.artifact_refs['resolution.log'] }}",
@@ -219,6 +228,8 @@
       "null/publication_planning.json": "${{ sequence.settings_null.outputs.artifact_refs['publication_planning.json'] }}",
       "null/fast_resolution.log": "${{ sequence.settings_null.outputs.artifact_refs['fast_resolution.log'] }}",
       "null/fast_resolution.json": "${{ sequence.settings_null.outputs.artifact_refs['fast_resolution.json'] }}",
+      "null/smoke_versions.log": "${{ sequence.settings_null.outputs.artifact_refs['smoke_versions.log'] }}",
+      "null/smoke_versions.json": "${{ sequence.settings_null.outputs.artifact_refs['smoke_versions.json'] }}",
       "null/verification.md": "${{ sequence.settings_null.outputs.artifact_refs['verification.md'] }}",
       "null/environment.json": "${{ sequence.settings_null.outputs.artifact_refs['environment.json'] }}",
       "value/resolution.log": "${{ sequence.settings_value.outputs.artifact_refs['resolution.log'] }}",
@@ -227,6 +238,8 @@
       "value/publication_planning.json": "${{ sequence.settings_value.outputs.artifact_refs['publication_planning.json'] }}",
       "value/fast_resolution.log": "${{ sequence.settings_value.outputs.artifact_refs['fast_resolution.log'] }}",
       "value/fast_resolution.json": "${{ sequence.settings_value.outputs.artifact_refs['fast_resolution.json'] }}",
+      "value/smoke_versions.log": "${{ sequence.settings_value.outputs.artifact_refs['smoke_versions.log'] }}",
+      "value/smoke_versions.json": "${{ sequence.settings_value.outputs.artifact_refs['smoke_versions.json'] }}",
       "value/verification.md": "${{ sequence.settings_value.outputs.artifact_refs['verification.md'] }}",
       "value/environment.json": "${{ sequence.settings_value.outputs.artifact_refs['environment.json'] }}"
     }

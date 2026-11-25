@@ -48,6 +48,33 @@ sequence:
       CANDIDATE: ${{ inputs.candidate }}
       BASE: ${{ inputs.base }}
     run: python3 -B "$ROOT/scripts/verify-local.py" fast_resolution
+- id: smoke_versions
+  op: command_execution
+  const: true
+  execution_needs:
+    packages:
+    - nix:github:NixOS/nixpkgs/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8#python3
+  inputs:
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
+    run: python3 -B "$ROOT/scripts/verify-local.py" smoke_versions
+- id: image
+  op: command_execution
+  const: true
+  execution_needs:
+    base: 'ubuntu*'
+    capabilities: [docker]
+  inputs:
+    timeout: 110m
+    env:
+      ROOT: ${{ context.environment.op.worktree_path }}
+      OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
+    run: python3 -B "$ROOT/scripts/verify-image.py"
 - id: aggregate
   op: command_execution
   const: true
@@ -61,16 +88,26 @@ sequence:
     publication_planning.log: ${{ sequence.publication_planning.artifacts['publication_planning.log'] }}
     fast_resolution.json: ${{ sequence.fast_resolution.artifacts['fast_resolution.json'] }}
     fast_resolution.log: ${{ sequence.fast_resolution.artifacts['fast_resolution.log'] }}
+    smoke_versions.json: ${{ sequence.smoke_versions.artifacts['smoke_versions.json'] }}
+    smoke_versions.log: ${{ sequence.smoke_versions.artifacts['smoke_versions.log'] }}
+    image.json: ${{ sequence.image.artifacts['image.json'] }}
+    image-preflight.log: ${{ sequence.image.artifacts['image-preflight.log'] }}
+    image-resolution.log: ${{ sequence.image.artifacts['image-resolution.log'] }}
+    image-build.log: ${{ sequence.image.artifacts['image-build.log'] }}
+    image-acceptance.log: ${{ sequence.image.artifacts['image-acceptance.log'] }}
+    image-cleanup.log: ${{ sequence.image.artifacts['image-cleanup.log'] }}
   inputs:
     env:
       ROOT: ${{ context.environment.op.worktree_path }}
       INBOX: ${{ context.environment.op.inbox }}
       OUTBOX: ${{ context.environment.op.outbox }}
+      CANDIDATE: ${{ inputs.candidate }}
+      BASE: ${{ inputs.base }}
     run: python3 -B "$ROOT/scripts/verify-local.py" aggregate
 outputs:
   api_version: c2.build-hook/v1
   status: ${{ sequence.aggregate.outputs.stdout }}
-  summary: Three offline base suites completed; inspect verification.md and the per-behavior logs. Image resolution, builds and publication remain held.
+  summary: Inspect verification.md and the logs for native image, offline test and discovery results. No image publication runs.
   artifact_refs:
     resolution.json: ${{ sequence.resolution.artifacts['resolution.json'] }}
     resolution.log: ${{ sequence.resolution.artifacts['resolution.log'] }}
@@ -78,5 +115,13 @@ outputs:
     publication_planning.log: ${{ sequence.publication_planning.artifacts['publication_planning.log'] }}
     fast_resolution.json: ${{ sequence.fast_resolution.artifacts['fast_resolution.json'] }}
     fast_resolution.log: ${{ sequence.fast_resolution.artifacts['fast_resolution.log'] }}
+    smoke_versions.json: ${{ sequence.smoke_versions.artifacts['smoke_versions.json'] }}
+    smoke_versions.log: ${{ sequence.smoke_versions.artifacts['smoke_versions.log'] }}
     verification.md: ${{ sequence.aggregate.artifacts['verification.md'] }}
     environment.json: ${{ sequence.aggregate.artifacts['environment.json'] }}
+    image.json: ${{ sequence.image.artifacts['image.json'] }}
+    image-preflight.log: ${{ sequence.image.artifacts['image-preflight.log'] }}
+    image-resolution.log: ${{ sequence.image.artifacts['image-resolution.log'] }}
+    image-build.log: ${{ sequence.image.artifacts['image-build.log'] }}
+    image-acceptance.log: ${{ sequence.image.artifacts['image-acceptance.log'] }}
+    image-cleanup.log: ${{ sequence.image.artifacts['image-cleanup.log'] }}

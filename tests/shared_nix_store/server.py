@@ -29,4 +29,6 @@ class Handler(SimpleHTTPRequestHandler):
             pass
 
 
-ThreadingHTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
+with ThreadingHTTPServer(('0.0.0.0', 8000), Handler) as server:
+    Path('/coord/server-ready').touch()
+    server.serve_forever()

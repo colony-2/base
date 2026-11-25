@@ -115,6 +115,37 @@ class FastResolutionTests(unittest.TestCase):
         inputs = {"apt_plan_key": "one", "apt": {"arm64": {"bash": "1"}}}
         self.assertEqual(versions.fingerprint(inputs), versions.fingerprint({**inputs, "apt_plan_key": "two"}))
 
+    def test_verify_resolves_only_requested_architecture_without_reuse(self):
+        for arch in ('amd64', 'arm64'):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'apt').mkdir()
+                (root / 'apt/nix-version').write_text(PIN)
+                with patch.multiple(versions, ROOT=root), \
+                        patch.object(versions, 'fetch', return_value=b'CA'), \
+                        patch.object(versions, 'ubuntu_image', return_value=('ubuntu@index', {arch: 'ubuntu@native'})), \
+                        patch.object(versions, 'apt_plan', return_value=({'nix-bin': PIN}, PIN)) as plan, \
+                        patch.object(versions, 'repository_indexes') as indexes, \
+                        patch.object(versions, 'node_tool', return_value={}), \
+                        patch.object(versions, 'pnpm_tool', return_value={}), \
+                        patch.object(versions, 'c2j_tool', return_value={}), \
+                        patch.object(versions, 'github_tool', return_value={}):
+                    result = versions.resolve(verify_arch=arch)
+                indexes.assert_not_called()
+                self.assertEqual(plan.call_count, 1)
+                self.assertEqual(plan.call_args.args, ('ubuntu@native', result['build_args']['APT_SNAPSHOT'], PIN, arch))
+                self.assertEqual(set(result['apt']), {arch})
+                self.assertEqual(sorted(path.name for path in (root / '.build/apt').iterdir()), [f'{arch}.txt'])
+
+    def test_verify_arch_rejects_published_inputs_and_invalid_arch(self):
+        for arguments in (['--verify-arch', 'mips'], ['--verify-arch', 'arm64', '--image', 'base'],
+                          ['--verify-arch', 'amd64', '--check']):
+            with self.subTest(arguments=arguments), patch('sys.argv', ['resolve', *arguments]), \
+                    patch.object(versions, 'published_manifest') as published, \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                versions.main()
+            published.assert_not_called()
+
     def test_scheduled_check_refreshes_only_changed_plan_metadata(self):
         for scenario in ("metadata", "unchanged", "packages"):
             data = json.loads(cached_plan()["annotations"][versions.APT_PLAN_ANNOTATION])

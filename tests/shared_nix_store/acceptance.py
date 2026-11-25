@@ -1,6 +1,7 @@
 """Production-image acceptance for the provider-initialized shared-store contract."""
 import argparse
 import json
+import os
 import shlex
 import statistics
 import time
@@ -9,6 +10,16 @@ from pathlib import Path
 
 import probe
 from compatibility import CHECK, INSPECT
+
+
+class AcceptanceResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.passed = []
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self.passed.append(test.id())
 
 
 class Acceptance(probe.Probe):
@@ -196,5 +207,10 @@ if __name__ == '__main__':
         'test_unsigned_substitutes_are_rejected', 'test_c2j_child_process', 'test_startup_timings',
         'test_distinct_image_revisions',
     ]
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(case) for case in cases))
+    result = unittest.TextTestRunner(verbosity=2, resultclass=AcceptanceResult).run(
+        unittest.TestSuite(Acceptance(case) for case in cases))
+    if report := os.environ.get('BASE_VERIFY_ACCEPTANCE_REPORT'):
+        Path(report).write_text(json.dumps(dict(
+            tests_run=result.testsRun, passed=result.passed,
+            skipped=[dict(case=test.id(), reason=reason) for test, reason in result.skipped]), indent=2) + '\n')
     raise SystemExit(not result.wasSuccessful())
